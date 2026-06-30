@@ -1,4 +1,5 @@
 #include "EspiAnalyzer.h"
+#include "EspiCommand.h"
 #include "EspiAnalyzerSettings.h"
 #include <AnalyzerChannelData.h>
 
@@ -10,7 +11,7 @@ namespace
 		kAlertFrame = 2
 	};
 
-	static constexpr U32 kPreviewCommandByteCount = 4;
+	static constexpr U32 kPreviewCommandByteCount = EspiCommand::kPreviewByteCount;
 	static constexpr U32 kPreviewResponseByteCount = 4;
 
 	enum class EspiIoMode : U8
@@ -19,27 +20,6 @@ namespace
 		Dual = 1,
 		Quad = 2
 	};
-
-	U32 GetExpectedCommandByteCount( U8 opcode, U8 second_byte = 0 )
-	{
-		switch( opcode )
-		{
-		case 0x04: // PUT_VWIRE: opcode, count, 2 bytes/group, CRC
-			return 5 + ( 2 * ( second_byte & 0x3f ) );
-		case 0x05: // GET_VWIRE
-			return 2;
-		case 0x25: // GET_STATUS
-			return 2;
-		case 0x21: // GET_CONFIGURATION
-			return 4;
-		case 0x22: // SET_CONFIGURATION
-			return 8;
-		case 0xff: // RESET
-			return 1;
-		default:
-			return kPreviewCommandByteCount;
-		}
-	}
 
 	bool IsAcceptResponse( U8 response )
 	{
@@ -165,6 +145,9 @@ void EspiAnalyzer::WorkerThread()
 		U32 expected_command_bytes = kPreviewCommandByteCount;
 		U32 turnaround_edge_count = 0;
 		U8 command_opcode = 0;
+		U8 command_byte1 = 0;
+		U8 command_byte2 = 0;
+		U8 command_byte3 = 0;
 		U16 configuration_address = 0;
 		U32 configuration_value = 0;
 		U8 first_response_byte = 0xff;
@@ -252,9 +235,24 @@ void EspiAnalyzer::WorkerThread()
 							if( command_byte_index == 0 )
 							{
 								command_opcode = current_command_byte;
-								expected_command_bytes = GetExpectedCommandByteCount( current_command_byte );
 							}
-							else if( command_opcode == 0x21 || command_opcode == 0x22 )
+							else if( command_byte_index == 1 )
+							{
+								command_byte1 = current_command_byte;
+							}
+							else if( command_byte_index == 2 )
+							{
+								command_byte2 = current_command_byte;
+							}
+							else if( command_byte_index == 3 )
+							{
+								command_byte3 = current_command_byte;
+							}
+
+							expected_command_bytes = EspiCommand::GetExpectedByteCount(
+								command_opcode, command_byte1, command_byte2, command_byte3 );
+
+							if( command_byte_index > 0 && ( command_opcode == 0x21 || command_opcode == 0x22 ) )
 							{
 								if( command_byte_index == 1 )
 									configuration_address = U16( current_command_byte ) << 8;
@@ -265,7 +263,6 @@ void EspiAnalyzer::WorkerThread()
 							}
 							else if( command_opcode == 0x04 && command_byte_index == 1 )
 							{
-								expected_command_bytes = GetExpectedCommandByteCount( command_opcode, current_command_byte );
 								transaction_details.virtual_wire_group_count = ( current_command_byte & 0x3f ) + 1;
 							}
 							else if( command_opcode == 0x04 && command_byte_index >= 2 &&

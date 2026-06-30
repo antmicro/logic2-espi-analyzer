@@ -1,4 +1,5 @@
 #include "EspiAnalyzerResults.h"
+#include "EspiCommand.h"
 #include <AnalyzerHelpers.h>
 #include "EspiAnalyzer.h"
 #include "EspiAnalyzerSettings.h"
@@ -8,7 +9,7 @@
 
 namespace
 {
-	static constexpr U32 kPreviewCommandByteCount = 4;
+	static constexpr U32 kPreviewCommandByteCount = EspiCommand::kPreviewByteCount;
 	static constexpr U32 kPreviewResponseByteCount = 4;
 
 	const char* GetOpcodeName( U8 opcode )
@@ -49,27 +50,6 @@ namespace
 			return "WAIT_STATE";
 
 		return "UNKNOWN_RSP";
-	}
-
-	U32 GetExpectedCommandByteCount( U8 opcode, U8 second_byte = 0 )
-	{
-		switch( opcode )
-		{
-		case 0x04: // PUT_VWIRE: opcode, count, 2 bytes/group, CRC
-			return 5 + ( 2 * ( second_byte & 0x3f ) );
-		case 0x05: // GET_VWIRE
-			return 2;
-		case 0x25: // GET_STATUS
-			return 2;
-		case 0x21: // GET_CONFIGURATION
-			return 4;
-		case 0x22: // SET_CONFIGURATION
-			return 8;
-		case 0xff: // RESET
-			return 1;
-		default:
-			return kPreviewCommandByteCount;
-		}
 	}
 
 	const char* GetIoModeName( U32 mode )
@@ -527,7 +507,7 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 			const U32 cmd_b2 = cmd_preview_count >= 3 ? U32( ( frame.mData1 >> 16 ) & 0xffULL ) : 0;
 			const U32 cmd_b3 = cmd_preview_count >= 4 ? U32( ( frame.mData1 >> 24 ) & 0xffULL ) : 0;
 			const U32 cmd_prefix32 = cmd_preview_count >= 4 ? U32( frame.mData1 & 0xffffffffULL ) : 0;
-			const U32 expected_byte_count = cmd_preview_count >= 1 ? GetExpectedCommandByteCount( U8( cmd_b0 ), U8( cmd_b1 ) ) : kPreviewCommandByteCount;
+			const U32 expected_byte_count = cmd_preview_count >= 1 ? EspiCommand::GetExpectedByteCount( U8( cmd_b0 ), U8( cmd_b1 ), U8( cmd_b2 ), U8( cmd_b3 ) ) : kPreviewCommandByteCount;
 			const U32 rsp_b0 = rsp_preview_count >= 1 ? U32( ( frame.mData1 >> 32 ) & 0xffULL ) : 0;
 			const U32 rsp_b1 = rsp_preview_count >= 2 ? U32( ( frame.mData1 >> 40 ) & 0xffULL ) : 0;
 			const U32 rsp_b2 = rsp_preview_count >= 3 ? U32( ( frame.mData1 >> 48 ) & 0xffULL ) : 0;
@@ -722,8 +702,10 @@ void EspiAnalyzerResults::GenerateExportFile( const char* file, DisplayBase disp
 		const U32 rsp_preview_count = rsp_byte_count < kPreviewResponseByteCount ? rsp_byte_count : kPreviewResponseByteCount;
 		const U32 cmd_byte0 = cmd_preview_count >= 1 ? U32( frame.mData1 & 0xffULL ) : 0;
 		const U32 cmd_byte1 = cmd_preview_count >= 2 ? U32( ( frame.mData1 >> 8 ) & 0xffULL ) : 0;
+		const U32 cmd_byte2 = cmd_preview_count >= 3 ? U32( ( frame.mData1 >> 16 ) & 0xffULL ) : 0;
+		const U32 cmd_byte3 = cmd_preview_count >= 4 ? U32( ( frame.mData1 >> 24 ) & 0xffULL ) : 0;
 		const U32 cmd_prefix32 = cmd_preview_count >= 4 ? U32( frame.mData1 & 0xffffffffULL ) : 0;
-		const U32 expected_byte_count = cmd_preview_count >= 1 ? GetExpectedCommandByteCount( U8( cmd_byte0 ), U8( cmd_byte1 ) ) : kPreviewCommandByteCount;
+		const U32 expected_byte_count = cmd_preview_count >= 1 ? EspiCommand::GetExpectedByteCount( U8( cmd_byte0 ), U8( cmd_byte1 ), U8( cmd_byte2 ), U8( cmd_byte3 ) ) : kPreviewCommandByteCount;
 		const U32 rsp_byte0 = rsp_preview_count >= 1 ? U32( ( frame.mData1 >> 32 ) & 0xffULL ) : 0;
 		const U32 rsp_byte1 = rsp_preview_count >= 2 ? U32( ( frame.mData1 >> 40 ) & 0xffULL ) : 0;
 		const char* opcode_name = cmd_preview_count >= 1 ? GetOpcodeName( U8( cmd_byte0 ) ) : "UNKNOWN_CMD";
@@ -807,8 +789,10 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 	const U32 rsp_preview_count = rsp_byte_count < kPreviewResponseByteCount ? rsp_byte_count : kPreviewResponseByteCount;
 	const U32 cmd_byte0 = cmd_preview_count >= 1 ? U32( frame.mData1 & 0xffULL ) : 0;
 	const U32 cmd_byte1 = cmd_preview_count >= 2 ? U32( ( frame.mData1 >> 8 ) & 0xffULL ) : 0;
+	const U32 cmd_byte2 = cmd_preview_count >= 3 ? U32( ( frame.mData1 >> 16 ) & 0xffULL ) : 0;
+	const U32 cmd_byte3 = cmd_preview_count >= 4 ? U32( ( frame.mData1 >> 24 ) & 0xffULL ) : 0;
 	const U32 cmd_prefix32 = cmd_preview_count >= 4 ? U32( frame.mData1 & 0xffffffffULL ) : 0;
-	const U32 expected_byte_count = cmd_preview_count >= 1 ? GetExpectedCommandByteCount( U8( cmd_byte0 ), U8( cmd_byte1 ) ) : kPreviewCommandByteCount;
+	const U32 expected_byte_count = cmd_preview_count >= 1 ? EspiCommand::GetExpectedByteCount( U8( cmd_byte0 ), U8( cmd_byte1 ), U8( cmd_byte2 ), U8( cmd_byte3 ) ) : kPreviewCommandByteCount;
 	const U32 rsp_byte0 = rsp_preview_count >= 1 ? U32( ( frame.mData1 >> 32 ) & 0xffULL ) : 0;
 	const char* opcode_name = cmd_preview_count >= 1 ? GetOpcodeName( U8( cmd_byte0 ) ) : "UNKNOWN_CMD";
 	const char* response_name = rsp_preview_count >= 1 ? GetResponseName( U8( rsp_byte0 ) ) : "NO_RESPONSE";
