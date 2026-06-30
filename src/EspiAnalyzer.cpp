@@ -146,6 +146,8 @@ void EspiAnalyzer::WorkerThread()
 		U32 observed_wait_state_bytes = 0;
 		U32 expected_command_bytes = kPreviewCommandByteCount;
 		U32 turnaround_edge_count = 0;
+		U32 reset_high_clock_count = 0;
+		bool reset_sequence_is_high = mIo2 != nullptr && mIo3 != nullptr;
 		U8 command_opcode = 0;
 		U8 command_byte1 = 0;
 		U8 command_byte2 = 0;
@@ -220,6 +222,20 @@ void EspiAnalyzer::WorkerThread()
 
 					if( mClock->GetBitState() != BIT_HIGH )
 						continue;
+
+					if( reset_sequence_is_high )
+					{
+						const U64 sample = mClock->GetSampleNumber();
+						mIo0->AdvanceToAbsPosition( sample );
+						mIo1->AdvanceToAbsPosition( sample );
+						mIo2->AdvanceToAbsPosition( sample );
+						mIo3->AdvanceToAbsPosition( sample );
+						reset_sequence_is_high = mIo0->GetBitState() == BIT_HIGH &&
+							mIo1->GetBitState() == BIT_HIGH && mIo2->GetBitState() == BIT_HIGH &&
+							mIo3->GetBitState() == BIT_HIGH;
+						if( reset_sequence_is_high )
+							++reset_high_clock_count;
+					}
 
 					if( phase == Phase::Command )
 					{
@@ -375,7 +391,9 @@ void EspiAnalyzer::WorkerThread()
 
 		const U64 transaction_end = mChipSelect->GetSampleNumber();
 		EspiIoMode next_io_mode = active_io_mode;
-		if( command_opcode == 0xff )
+		const bool complete_in_band_reset = command_opcode == 0xff && reset_sequence_is_high &&
+			reset_high_clock_count == 16;
+		if( complete_in_band_reset )
 		{
 			next_io_mode = EspiIoMode::Single;
 		}
