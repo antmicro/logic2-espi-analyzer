@@ -470,7 +470,7 @@ U32 EspiAnalyzer::GenerateSimulationData( U64 minimum_sample_index, U32 device_s
 
 U32 EspiAnalyzer::GetMinimumSampleRateHz()
 {
-	return 25000;
+	return 80000000; // Four samples per clock at the minimum 20 MHz eSPI frequency.
 }
 
 const char* EspiAnalyzer::GetAnalyzerName() const
