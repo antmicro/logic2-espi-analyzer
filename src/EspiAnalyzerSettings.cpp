@@ -29,9 +29,11 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	mIo1ChannelInterface.SetChannel( mIo1Channel );
 
 	mIo2ChannelInterface.SetTitleAndTooltip( "IO2", "eSPI IO2 data line." );
+	mIo2ChannelInterface.SetSelectionOfNoneIsAllowed( true );
 	mIo2ChannelInterface.SetChannel( mIo2Channel );
 
 	mIo3ChannelInterface.SetTitleAndTooltip( "IO3", "eSPI IO3 data line." );
+	mIo3ChannelInterface.SetSelectionOfNoneIsAllowed( true );
 	mIo3ChannelInterface.SetChannel( mIo3Channel );
 
 	AddInterface( &mClockChannelInterface );
@@ -72,8 +74,8 @@ bool EspiAnalyzerSettings::SetSettingsFromInterfaces()
 	AddChannel( mChipSelectChannel, "CS#", true );
 	AddChannel( mIo0Channel, "IO0", true );
 	AddChannel( mIo1Channel, "IO1", true );
-	AddChannel( mIo2Channel, "IO2", true );
-	AddChannel( mIo3Channel, "IO3", true );
+	AddChannel( mIo2Channel, "IO2", mIo2Channel != UNDEFINED_CHANNEL );
+	AddChannel( mIo3Channel, "IO3", mIo3Channel != UNDEFINED_CHANNEL );
 
 	return true;
 }
@@ -105,8 +107,8 @@ void EspiAnalyzerSettings::LoadSettings( const char* settings )
 	AddChannel( mChipSelectChannel, "CS#", true );
 	AddChannel( mIo0Channel, "IO0", true );
 	AddChannel( mIo1Channel, "IO1", true );
-	AddChannel( mIo2Channel, "IO2", true );
-	AddChannel( mIo3Channel, "IO3", true );
+	AddChannel( mIo2Channel, "IO2", mIo2Channel != UNDEFINED_CHANNEL );
+	AddChannel( mIo3Channel, "IO3", mIo3Channel != UNDEFINED_CHANNEL );
 
 	UpdateInterfacesFromSettings();
 }

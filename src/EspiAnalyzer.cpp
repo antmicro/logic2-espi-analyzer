@@ -61,8 +61,8 @@ void EspiAnalyzer::WorkerThread()
 	mChipSelect = GetAnalyzerChannelData( mSettings.mChipSelectChannel );
 	mIo0 = GetAnalyzerChannelData( mSettings.mIo0Channel );
 	mIo1 = GetAnalyzerChannelData( mSettings.mIo1Channel );
-	mIo2 = GetAnalyzerChannelData( mSettings.mIo2Channel );
-	mIo3 = GetAnalyzerChannelData( mSettings.mIo3Channel );
+	mIo2 = mSettings.mIo2Channel == UNDEFINED_CHANNEL ? nullptr : GetAnalyzerChannelData( mSettings.mIo2Channel );
+	mIo3 = mSettings.mIo3Channel == UNDEFINED_CHANNEL ? nullptr : GetAnalyzerChannelData( mSettings.mIo3Channel );
 	EspiIoMode active_io_mode = EspiIoMode::Single;
 	bool alert_armed = mIo1->GetBitState() == BIT_HIGH;
 	bool alert_asserted = false;
@@ -130,8 +130,10 @@ void EspiAnalyzer::WorkerThread()
 		mClock->AdvanceToAbsPosition( transaction_start );
 		mIo0->AdvanceToAbsPosition( transaction_start );
 		mIo1->AdvanceToAbsPosition( transaction_start );
-		mIo2->AdvanceToAbsPosition( transaction_start );
-		mIo3->AdvanceToAbsPosition( transaction_start );
+		if( mIo2 != nullptr )
+			mIo2->AdvanceToAbsPosition( transaction_start );
+		if( mIo3 != nullptr )
+			mIo3->AdvanceToAbsPosition( transaction_start );
 
 		U64 clock_edge_count = 0;
 		U64 preview_bytes = 0;
