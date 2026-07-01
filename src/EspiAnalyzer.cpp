@@ -66,6 +66,7 @@ void EspiAnalyzer::WorkerThread()
 	EspiIoMode active_io_mode = EspiIoMode::Single;
 	bool alert_armed = mIo1->GetBitState() == BIT_HIGH;
 	bool alert_asserted = false;
+	bool initial_idle_observation = mChipSelect->GetBitState() == BIT_HIGH;
 	U64 alert_start = 0;
 	auto EmitAlertFrame = [&]( U64 start, U64 end ) {
 		Frame frame;
@@ -88,7 +89,18 @@ void EspiAnalyzer::WorkerThread()
 		{
 			mIo1->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
 			if( mIo1->GetBitState() == BIT_HIGH )
+			{
 				alert_armed = true;
+			}
+			else if( initial_idle_observation && !alert_asserted )
+			{
+				// A capture may begin after ALERT# was asserted. During normal
+				// decoding, require the high-to-low transition while CS# is high.
+				alert_asserted = true;
+				alert_armed = false;
+				alert_start = mChipSelect->GetSampleNumber();
+			}
+			initial_idle_observation = false;
 
 			while( mChipSelect->GetBitState() == BIT_HIGH )
 			{
@@ -343,11 +355,15 @@ void EspiAnalyzer::WorkerThread()
 								{
 									configuration_value |= U32( current_response_byte ) << ( ( response_byte_index - 1 ) * 8 );
 								}
-								else if( command_opcode == 0x05 && response_byte_index == 1 )
+								else if( ( command_opcode == 0x05 ||
+									( command_opcode == 0x25 && ( ( first_response_byte >> 6 ) & 0x03 ) == 0x02 ) ) &&
+									response_byte_index == 1 )
 								{
 									transaction_details.virtual_wire_group_count = ( current_response_byte & 0x3f ) + 1;
 								}
-								else if( command_opcode == 0x05 && response_byte_index >= 2 &&
+								else if( ( command_opcode == 0x05 ||
+									( command_opcode == 0x25 && ( ( first_response_byte >> 6 ) & 0x03 ) == 0x02 ) ) &&
+									response_byte_index >= 2 &&
 									response_byte_index < 2 + ( 2 * transaction_details.virtual_wire_group_count ) )
 								{
 									if( ( response_byte_index & 1 ) == 0 )

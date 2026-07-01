@@ -632,6 +632,8 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 						if( ( rsp_b0 & 0x0f ) != 0x08 )
 							formatted << " - " << response_name;
 						formatted << '\n' << details;
+						if( !virtual_wire_details_multiline.empty() )
+							formatted << '\n' << virtual_wire_details_multiline;
 					}
 					else
 					{
