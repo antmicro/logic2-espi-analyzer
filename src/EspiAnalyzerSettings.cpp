@@ -9,12 +9,14 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	mIo1Channel( UNDEFINED_CHANNEL ),
 	mIo2Channel( UNDEFINED_CHANNEL ),
 	mIo3Channel( UNDEFINED_CHANNEL ),
+	mInitialIoMode( 0 ),
 	mClockChannelInterface(),
 	mChipSelectChannelInterface(),
 	mIo0ChannelInterface(),
 	mIo1ChannelInterface(),
 	mIo2ChannelInterface(),
-	mIo3ChannelInterface()
+	mIo3ChannelInterface(),
+	mInitialIoModeInterface()
 {
 	mClockChannelInterface.SetTitleAndTooltip( "Clock", "eSPI clock line." );
 	mClockChannelInterface.SetChannel( mClockChannel );
@@ -36,12 +38,19 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	mIo3ChannelInterface.SetSelectionOfNoneIsAllowed( true );
 	mIo3ChannelInterface.SetChannel( mIo3Channel );
 
+	mInitialIoModeInterface.SetTitleAndTooltip( "Initial I/O mode", "I/O width active at the beginning of the capture." );
+	mInitialIoModeInterface.AddNumber( 0, "Single", "Start by sampling commands and responses in Single I/O mode." );
+	mInitialIoModeInterface.AddNumber( 1, "Dual", "Start by sampling commands and responses in Dual I/O mode." );
+	mInitialIoModeInterface.AddNumber( 2, "Quad", "Start by sampling commands and responses in Quad I/O mode." );
+	mInitialIoModeInterface.SetNumber( mInitialIoMode );
+
 	AddInterface( &mClockChannelInterface );
 	AddInterface( &mChipSelectChannelInterface );
 	AddInterface( &mIo0ChannelInterface );
 	AddInterface( &mIo1ChannelInterface );
 	AddInterface( &mIo2ChannelInterface );
 	AddInterface( &mIo3ChannelInterface );
+	AddInterface( &mInitialIoModeInterface );
 
 	AddExportOption( 0, "Export as text/csv file" );
 	AddExportExtension( 0, "text", "txt" );
@@ -68,6 +77,18 @@ bool EspiAnalyzerSettings::SetSettingsFromInterfaces()
 	mIo1Channel = mIo1ChannelInterface.GetChannel();
 	mIo2Channel = mIo2ChannelInterface.GetChannel();
 	mIo3Channel = mIo3ChannelInterface.GetChannel();
+	mInitialIoMode = U32( mInitialIoModeInterface.GetNumber() );
+
+	if( mInitialIoMode > 2 )
+	{
+		SetErrorText( "Initial I/O mode is invalid." );
+		return false;
+	}
+	if( mInitialIoMode == 2 && ( mIo2Channel == UNDEFINED_CHANNEL || mIo3Channel == UNDEFINED_CHANNEL ) )
+	{
+		SetErrorText( "Quad I/O mode requires both IO2 and IO3 channels." );
+		return false;
+	}
 
 	ClearChannels();
 	AddChannel( mClockChannel, "CLK", true );
@@ -88,6 +109,7 @@ void EspiAnalyzerSettings::UpdateInterfacesFromSettings()
 	mIo1ChannelInterface.SetChannel( mIo1Channel );
 	mIo2ChannelInterface.SetChannel( mIo2Channel );
 	mIo3ChannelInterface.SetChannel( mIo3Channel );
+	mInitialIoModeInterface.SetNumber( mInitialIoMode );
 }
 
 void EspiAnalyzerSettings::LoadSettings( const char* settings )
@@ -101,6 +123,9 @@ void EspiAnalyzerSettings::LoadSettings( const char* settings )
 	text_archive >> mIo1Channel;
 	text_archive >> mIo2Channel;
 	text_archive >> mIo3Channel;
+	U32 initial_io_mode = 0;
+	if( text_archive >> initial_io_mode )
+		mInitialIoMode = initial_io_mode <= 2 ? initial_io_mode : 0;
 
 	ClearChannels();
 	AddChannel( mClockChannel, "CLK", true );
@@ -123,6 +148,7 @@ const char* EspiAnalyzerSettings::SaveSettings()
 	text_archive << mIo1Channel;
 	text_archive << mIo2Channel;
 	text_archive << mIo3Channel;
+	text_archive << mInitialIoMode;
 
 	return SetReturnString( text_archive.GetString() );
 }

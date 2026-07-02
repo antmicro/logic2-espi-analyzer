@@ -6,7 +6,7 @@ A low-level Intel eSPI protocol analyzer for Saleae Logic 2.
 
 | Area | Support |
 | --- | --- |
-| I/O modes | Single, Dual, and Quad. Captures start in Single mode and follow accepted `SET_CONFIGURATION` mode changes. |
+| I/O modes | Single, Dual, and Quad. The initial mode is selectable, and accepted `SET_CONFIGURATION` mode changes are followed automatically. |
 | Transaction framing | Command, turnaround, wait-state, and response phases for standard Peripheral, Virtual Wire, OOB, Flash, configuration, status, and short Peripheral commands. |
 | Responses | `ACCEPT`, `DEFER`, `NON_FATAL_ERROR`, `FATAL_ERROR`, and `WAIT_STATE`. |
 | Configuration | Detailed `GET_CONFIGURATION` and `SET_CONFIGURATION` output for Device Identification, General, Peripheral, Virtual Wire, OOB, and Flash registers. |
@@ -27,9 +27,8 @@ validate an in-band RESET. Use a capture rate of at least 80 MHz.
   addresses, tags, and payloads are not yet decoded into protocol fields.
 - CRC bytes are included in transaction framing but are not validated. Traffic
   with CRC disabled is not currently supported.
-- Mode detection assumes the capture begins while the link is in Single I/O
-  mode; captures beginning after a Dual or Quad transition will be decoded
-  incorrectly until the mode can be re-established.
+- The initial I/O mode must match the link state at the beginning of the
+  capture. It cannot be inferred reliably from arbitrary mid-session traffic.
 - Only shared IO1 `ALERT#` signaling is supported; a dedicated alert input is
   not available. An alert already asserted at capture start is reported from
   the first observable idle sample.

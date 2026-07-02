@@ -63,7 +63,7 @@ void EspiAnalyzer::WorkerThread()
 	mIo1 = GetAnalyzerChannelData( mSettings.mIo1Channel );
 	mIo2 = mSettings.mIo2Channel == UNDEFINED_CHANNEL ? nullptr : GetAnalyzerChannelData( mSettings.mIo2Channel );
 	mIo3 = mSettings.mIo3Channel == UNDEFINED_CHANNEL ? nullptr : GetAnalyzerChannelData( mSettings.mIo3Channel );
-	EspiIoMode active_io_mode = EspiIoMode::Single;
+	EspiIoMode active_io_mode = EspiIoMode( mSettings.mInitialIoMode );
 	bool alert_armed = mIo1->GetBitState() == BIT_HIGH;
 	bool alert_asserted = false;
 	bool initial_idle_observation = mChipSelect->GetBitState() == BIT_HIGH;
@@ -448,7 +448,9 @@ void EspiAnalyzer::WorkerThread()
 		else if( command_opcode == 0x22 && configuration_address == 0x0008 && IsAcceptResponse( first_response_byte ) )
 		{
 			const U8 requested_mode = U8( ( configuration_value >> 26 ) & 0x03 );
-			if( requested_mode <= U8( EspiIoMode::Quad ) )
+			const bool required_channels_available = requested_mode != U8( EspiIoMode::Quad ) ||
+				( mIo2 != nullptr && mIo3 != nullptr );
+			if( requested_mode <= U8( EspiIoMode::Quad ) && required_channels_available )
 				next_io_mode = EspiIoMode( requested_mode );
 		}
 
