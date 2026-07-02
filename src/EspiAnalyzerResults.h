@@ -28,6 +28,14 @@ public:
 		bool has_status = false;
 		U16 status = 0;
 		U8 response_modifier = 0;
+		bool has_short_io = false;
+		bool short_io_is_write = false;
+		bool short_io_has_data = false;
+		bool short_io_has_status = false;
+		U8 short_io_size = 0;
+		U16 short_io_address = 0;
+		U32 short_io_data = 0;
+		U16 short_io_status = 0;
 	};
 
 	EspiAnalyzerResults( EspiAnalyzer* analyzer, EspiAnalyzerSettings* settings );

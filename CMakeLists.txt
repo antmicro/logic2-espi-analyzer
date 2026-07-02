@@ -2,6 +2,8 @@ cmake_minimum_required (VERSION 3.13)
 
 project(EspiAnalyzer)
 
+include(CTest)
+
 add_definitions( -DLOGIC2 )
 
 option(ESPI_DEBUG_TRANSACTION_DETAILS "Emit verbose transaction metadata in analyzer text output" OFF)
@@ -31,3 +33,9 @@ src/EspiSimulationDataGenerator.h
 )
 
 add_analyzer_plugin(${PROJECT_NAME} SOURCES ${SOURCES})
+
+if( BUILD_TESTING )
+    add_executable(EspiCommandTests tests/EspiCommandTests.cpp)
+    target_include_directories(EspiCommandTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+    add_test(NAME EspiCommandTests COMMAND EspiCommandTests)
+endif()

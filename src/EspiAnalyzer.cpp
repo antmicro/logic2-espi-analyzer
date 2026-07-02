@@ -188,8 +188,7 @@ void EspiAnalyzer::WorkerThread()
 			response_tail1 = response_tail2;
 			response_tail2 = value;
 		};
-		auto SampleSymbol = [&]( bool response_phase ) -> U8 {
-			const U64 sample = mClock->GetSampleNumber();
+		auto SampleSymbol = [&]( bool response_phase, U64 sample ) -> U8 {
 			if( active_io_mode == EspiIoMode::Single )
 			{
 				AnalyzerChannelData* data = response_phase ? mIo1 : mIo0;
@@ -235,13 +234,24 @@ void EspiAnalyzer::WorkerThread()
 					if( mClock->GetBitState() != BIT_HIGH )
 						continue;
 
+					// Sample inside the stable high phase rather than exactly at the
+					// rising-edge timestamp. Logic 2 can assign simultaneous clock and
+					// data transitions to the same sample, making their ordering
+					// ambiguous at the edge even though the captured high phase is
+					// unambiguous.
+					const U64 rising_edge_sample = mClock->GetSampleNumber();
+					const U64 following_edge_sample = mClock->GetSampleOfNextEdge();
+					const U64 stable_phase_end = following_edge_sample < next_cs_edge ?
+						following_edge_sample : next_cs_edge;
+					const U64 stable_sample = rising_edge_sample +
+						( ( 3 * ( stable_phase_end - rising_edge_sample ) ) / 4 );
+
 					if( reset_sequence_is_high )
 					{
-						const U64 sample = mClock->GetSampleNumber();
-						mIo0->AdvanceToAbsPosition( sample );
-						mIo1->AdvanceToAbsPosition( sample );
-						mIo2->AdvanceToAbsPosition( sample );
-						mIo3->AdvanceToAbsPosition( sample );
+						mIo0->AdvanceToAbsPosition( stable_sample );
+						mIo1->AdvanceToAbsPosition( stable_sample );
+						mIo2->AdvanceToAbsPosition( stable_sample );
+						mIo3->AdvanceToAbsPosition( stable_sample );
 						reset_sequence_is_high = mIo0->GetBitState() == BIT_HIGH &&
 							mIo1->GetBitState() == BIT_HIGH && mIo2->GetBitState() == BIT_HIGH &&
 							mIo3->GetBitState() == BIT_HIGH;
@@ -251,7 +261,8 @@ void EspiAnalyzer::WorkerThread()
 
 					if( phase == Phase::Command )
 					{
-						current_command_byte = U8( ( current_command_byte << bits_per_clock ) | SampleSymbol( false ) );
+						current_command_byte = U8( ( current_command_byte << bits_per_clock ) |
+							SampleSymbol( false, stable_sample ) );
 
 						current_command_bit_count += bits_per_clock;
 						if( current_command_bit_count == 8 )
@@ -291,6 +302,19 @@ void EspiAnalyzer::WorkerThread()
 								else if( command_opcode == 0x22 && command_byte_index >= 3 && command_byte_index <= 6 )
 									configuration_value |= U32( current_command_byte ) << ( ( command_byte_index - 3 ) * 8 );
 							}
+							else if( command_byte_index > 0 && EspiCommand::IsShortIoOpcode( command_opcode ) )
+							{
+								if( command_byte_index == 1 )
+									transaction_details.short_io_address = U16( current_command_byte ) << 8;
+								else if( command_byte_index == 2 )
+									transaction_details.short_io_address |= current_command_byte;
+								else if( EspiCommand::IsShortIoWrite( command_opcode ) && command_byte_index >= 3 &&
+									command_byte_index < 3 + EspiCommand::GetShortAccessByteCount( command_opcode ) )
+								{
+									transaction_details.short_io_data |= U32( current_command_byte ) <<
+										( ( command_byte_index - 3 ) * 8 );
+								}
+							}
 							else if( command_opcode == 0x04 && command_byte_index == 1 )
 							{
 								transaction_details.virtual_wire_group_count = ( current_command_byte & 0x3f ) + 1;
@@ -326,7 +350,8 @@ void EspiAnalyzer::WorkerThread()
 					}
 					else
 					{
-						current_response_byte = U8( ( current_response_byte << bits_per_clock ) | SampleSymbol( true ) );
+						current_response_byte = U8( ( current_response_byte << bits_per_clock ) |
+							SampleSymbol( true, stable_sample ) );
 
 						current_response_bit_count += bits_per_clock;
 						if( current_response_bit_count == 8 )
@@ -354,6 +379,13 @@ void EspiAnalyzer::WorkerThread()
 								if( command_opcode == 0x21 && response_byte_index >= 1 && response_byte_index <= 4 )
 								{
 									configuration_value |= U32( current_response_byte ) << ( ( response_byte_index - 1 ) * 8 );
+								}
+								else if( EspiCommand::IsShortIoOpcode( command_opcode ) &&
+									!EspiCommand::IsShortIoWrite( command_opcode ) && response_byte_index >= 1 &&
+									response_byte_index <= EspiCommand::GetShortAccessByteCount( command_opcode ) )
+								{
+									transaction_details.short_io_data |= U32( current_response_byte ) <<
+										( ( response_byte_index - 1 ) * 8 );
 								}
 								else if( ( command_opcode == 0x05 ||
 									( command_opcode == 0x25 && ( ( first_response_byte >> 6 ) & 0x03 ) == 0x02 ) ) &&
@@ -438,6 +470,22 @@ void EspiAnalyzer::WorkerThread()
 			transaction_details.has_status = true;
 			transaction_details.status = U16( response_tail0 ) | ( U16( response_tail1 ) << 8 );
 			transaction_details.response_modifier = U8( ( first_response_byte >> 6 ) & 0x03 );
+		}
+
+		if( EspiCommand::IsShortIoOpcode( command_opcode ) && captured_command_bytes >= expected_command_bytes )
+		{
+			const U32 access_size = EspiCommand::GetShortAccessByteCount( command_opcode );
+			const bool is_write = EspiCommand::IsShortIoWrite( command_opcode );
+			const bool response_has_data = !is_write && IsAcceptResponse( first_response_byte );
+			const U32 minimum_response_bytes = 4 + ( response_has_data ? access_size : 0 );
+			transaction_details.has_short_io = true;
+			transaction_details.short_io_is_write = is_write;
+			transaction_details.short_io_has_data = is_write ||
+				( response_has_data && captured_response_bytes >= minimum_response_bytes );
+			transaction_details.short_io_has_status = captured_response_bytes >= minimum_response_bytes;
+			transaction_details.short_io_size = U8( access_size );
+			if( captured_response_bytes >= minimum_response_bytes )
+				transaction_details.short_io_status = U16( response_tail0 ) | ( U16( response_tail1 ) << 8 );
 		}
 
 		Frame frame;

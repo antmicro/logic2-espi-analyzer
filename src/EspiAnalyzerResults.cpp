@@ -26,6 +26,14 @@ namespace
 			return "PUT_VWIRE";
 		case 0x05:
 			return "GET_VWIRE";
+		case 0x40:
+		case 0x41:
+		case 0x43:
+			return "PUT_IORD_SHORT";
+		case 0x44:
+		case 0x45:
+		case 0x47:
+			return "PUT_IOWR_SHORT";
 		case 0xff:
 			return "RESET";
 		default:
@@ -313,6 +321,31 @@ namespace
 		return result.str();
 	}
 
+	std::string FormatShortIoDetailsMultiline( const EspiAnalyzerResults::TransactionDetails& details )
+	{
+		if( !details.has_short_io )
+			return "";
+
+		std::ostringstream result;
+		result << "  " << ( details.short_io_is_write ? "Write" : "Read" ) << ' '
+			   << std::dec << unsigned( details.short_io_size ) << ( details.short_io_size == 1 ? " byte" : " bytes" )
+			   << " @ 0x" << std::hex << std::uppercase << std::setw( 4 ) << std::setfill( '0' )
+			   << details.short_io_address;
+		if( details.short_io_has_data )
+		{
+			result << " | Data 0x" << std::setw( details.short_io_size * 2 ) << std::setfill( '0' )
+				   << details.short_io_data;
+		}
+		if( details.short_io_has_status )
+		{
+			result << "\n  Status 0x" << std::setw( 4 ) << std::setfill( '0' ) << details.short_io_status;
+			const std::string status_flags = FormatStatusFlags( details.short_io_status );
+			if( !status_flags.empty() )
+				result << " | " << status_flags;
+		}
+		return result.str();
+	}
+
 	const char* GetSystemEventName( U8 index, U32 slot )
 	{
 		static const char* names[6][4] = {
@@ -518,6 +551,7 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 			const std::string virtual_wire_details_multiline = FormatVirtualWireDetailsMultiline( transaction_details );
 			const std::string configuration_details_multiline = FormatConfigurationDetailsMultiline( transaction_details );
 			const std::string status_details_multiline = FormatStatusDetailsMultiline( transaction_details );
+			const std::string short_io_details_multiline = FormatShortIoDetailsMultiline( transaction_details );
 
 #ifdef ESPI_DEBUG_TRANSACTION_DETAILS
 			char mode_str[48];
@@ -533,6 +567,8 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 				AddResultString( configuration_details_multiline.c_str() );
 			if( !status_details_multiline.empty() )
 				AddResultString( status_details_multiline.c_str() );
+			if( !short_io_details_multiline.empty() )
+				AddResultString( short_io_details_multiline.c_str() );
 			if( wait_state_count > 0 )
 			{
 				char wait_state_str[48];
@@ -615,7 +651,8 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 				AddResultString( opcode_name );
 
 				const std::string& details = !status_details_multiline.empty() ? status_details_multiline :
-					( !configuration_details_multiline.empty() ? configuration_details_multiline : virtual_wire_details_multiline );
+					( !configuration_details_multiline.empty() ? configuration_details_multiline :
+						( !short_io_details_multiline.empty() ? short_io_details_multiline : virtual_wire_details_multiline ) );
 				if( !details.empty() )
 				{
 					std::ostringstream formatted;
@@ -634,6 +671,13 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 						formatted << '\n' << details;
 						if( !virtual_wire_details_multiline.empty() )
 							formatted << '\n' << virtual_wire_details_multiline;
+					}
+					else if( transaction_details.has_short_io )
+					{
+						formatted << opcode_name;
+						if( rsp_preview_count == 0 || ( rsp_b0 & 0x0f ) != 0x08 )
+							formatted << " - " << response_name;
+						formatted << '\n' << details;
 					}
 					else
 					{
@@ -664,7 +708,7 @@ void EspiAnalyzerResults::GenerateExportFile( const char* file, DisplayBase disp
 	U64 trigger_sample = mAnalyzer->GetTriggerSample();
 	U32 sample_rate = mAnalyzer->GetSampleRate();
 
-	file_stream << "Time [s],Type,IoMode,NextIoMode,EdgeCount,CmdByteCount,RspByteCount,WaitStateCount,ExpectedCmdByteCount,CmdPartialBits,RspPartialBits,CmdByte0,CmdByte1,CmdPrefix32,RspByte0,RspByte1,CmdPreviewBytes,RspPreviewBytes,OpcodeName,ResponseName,Status,StatusFlags,ResponseModifier,VirtualWireDetails,ConfigurationDetails" << std::endl;
+	file_stream << "Time [s],Type,IoMode,NextIoMode,EdgeCount,CmdByteCount,RspByteCount,WaitStateCount,ExpectedCmdByteCount,CmdPartialBits,RspPartialBits,CmdByte0,CmdByte1,CmdPrefix32,RspByte0,RspByte1,CmdPreviewBytes,RspPreviewBytes,OpcodeName,ResponseName,Status,StatusFlags,ResponseModifier,VirtualWireDetails,ConfigurationDetails,ShortIoDetails" << std::endl;
 
 	U64 num_frames = GetNumFrames();
 	for( U32 i=0; i < num_frames; i++ )
@@ -674,6 +718,7 @@ void EspiAnalyzerResults::GenerateExportFile( const char* file, DisplayBase disp
 		GetTransactionDetails( i, transaction_details );
 		const std::string virtual_wire_details = FormatVirtualWireDetails( transaction_details );
 		const std::string configuration_details = FormatConfigurationDetailsMultiline( transaction_details );
+		const std::string short_io_details = FormatShortIoDetailsMultiline( transaction_details );
 		const std::string status_flags = transaction_details.has_status ? FormatStatusFlags( transaction_details.status ) : "";
 		
 		char time_str[128];
@@ -681,7 +726,7 @@ void EspiAnalyzerResults::GenerateExportFile( const char* file, DisplayBase disp
 		if( frame.mType == AlertFrame )
 		{
 			file_stream << time_str << ",alert";
-			for( U32 column = 0; column < 23; ++column )
+			for( U32 column = 0; column < 24; ++column )
 				file_stream << ',';
 			file_stream << std::endl;
 			if( UpdateExportProgressAndCheckForCancel( i, num_frames ) == true )
@@ -748,7 +793,7 @@ void EspiAnalyzerResults::GenerateExportFile( const char* file, DisplayBase disp
 		snprintf( rsp_byte1_str, sizeof( rsp_byte1_str ), rsp_preview_count >= 2 ? "%02X" : "" , rsp_byte1 );
 		char status_str[16];
 		snprintf( status_str, sizeof( status_str ), transaction_details.has_status ? "%04X" : "", transaction_details.status );
-		file_stream << time_str << "," << type_str << "," << GetIoModeName( io_mode ) << "," << GetIoModeName( next_io_mode ) << "," << edge_count << "," << cmd_byte_count << "," << rsp_byte_count << "," << wait_state_count << "," << expected_byte_count << "," << cmd_partial_bits << "," << rsp_partial_bits << "," << cmd_byte0_str << "," << cmd_byte1_str << "," << cmd_prefix32_str << "," << rsp_byte0_str << "," << rsp_byte1_str << "," << cmd_preview.str() << "," << rsp_preview.str() << "," << opcode_name << "," << response_name << "," << status_str << ",\"" << status_flags << "\"," << ( transaction_details.has_status ? GetResponseModifierName( transaction_details.response_modifier ) : "" ) << ",\"" << virtual_wire_details << "\",\"" << configuration_details << "\"" << std::endl;
+		file_stream << time_str << "," << type_str << "," << GetIoModeName( io_mode ) << "," << GetIoModeName( next_io_mode ) << "," << edge_count << "," << cmd_byte_count << "," << rsp_byte_count << "," << wait_state_count << "," << expected_byte_count << "," << cmd_partial_bits << "," << rsp_partial_bits << "," << cmd_byte0_str << "," << cmd_byte1_str << "," << cmd_prefix32_str << "," << rsp_byte0_str << "," << rsp_byte1_str << "," << cmd_preview.str() << "," << rsp_preview.str() << "," << opcode_name << "," << response_name << "," << status_str << ",\"" << status_flags << "\"," << ( transaction_details.has_status ? GetResponseModifierName( transaction_details.response_modifier ) : "" ) << ",\"" << virtual_wire_details << "\",\"" << configuration_details << "\",\"" << short_io_details << "\"" << std::endl;
 
 		if( UpdateExportProgressAndCheckForCancel( i, num_frames ) == true )
 		{
@@ -802,6 +847,7 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 		const std::string virtual_wire_details_multiline = FormatVirtualWireDetailsMultiline( transaction_details );
 		const std::string configuration_details_multiline = FormatConfigurationDetailsMultiline( transaction_details );
 		const std::string status_details_multiline = FormatStatusDetailsMultiline( transaction_details );
+		const std::string short_io_details_multiline = FormatShortIoDetailsMultiline( transaction_details );
 #ifdef ESPI_DEBUG_TRANSACTION_DETAILS
 		char mode_summary[32];
 		if( io_mode == next_io_mode )
@@ -900,6 +946,13 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 			tabular_summary += status_details_multiline;
 			tabular_summary += '\n';
 		}
+		if( !short_io_details_multiline.empty() )
+		{
+			if( !tabular_summary.empty() && tabular_summary[tabular_summary.size() - 1] != '\n' )
+				tabular_summary += '\n';
+			tabular_summary += short_io_details_multiline;
+			tabular_summary += '\n';
+		}
 		AddTabularText( tabular_summary.c_str() );
 #else
 		if( cmd_preview_count >= 1 )
@@ -907,7 +960,8 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 			std::ostringstream summary;
 			summary << opcode_name;
 			const std::string& details = !status_details_multiline.empty() ? status_details_multiline :
-				( !configuration_details_multiline.empty() ? configuration_details_multiline : virtual_wire_details_multiline );
+				( !configuration_details_multiline.empty() ? configuration_details_multiline :
+					( !short_io_details_multiline.empty() ? short_io_details_multiline : virtual_wire_details_multiline ) );
 			if( !details.empty() )
 			{
 				if( transaction_details.has_configuration )
@@ -920,6 +974,12 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 					if( !pending.empty() )
 						summary << " - " << pending << " pending";
 					if( ( rsp_byte0 & 0x0f ) != 0x08 )
+						summary << " - " << response_name;
+					summary << '\n' << details;
+				}
+				else if( transaction_details.has_short_io )
+				{
+					if( rsp_preview_count == 0 || ( rsp_byte0 & 0x0f ) != 0x08 )
 						summary << " - " << response_name;
 					summary << '\n' << details;
 				}

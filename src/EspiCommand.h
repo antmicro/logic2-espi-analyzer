@@ -7,6 +7,25 @@ namespace EspiCommand
 {
     static constexpr std::uint32_t kPreviewByteCount = 4;
 
+    inline bool IsShortIoOpcode( std::uint8_t opcode )
+    {
+        const std::uint8_t size_encoding = opcode & 0x03;
+        return ( opcode & 0xf8 ) == 0x40 && size_encoding != 0x02;
+    }
+
+    inline bool IsShortIoWrite( std::uint8_t opcode )
+    {
+        return IsShortIoOpcode( opcode ) && ( opcode & 0x04 ) != 0;
+    }
+
+    inline std::uint32_t GetShortAccessByteCount( std::uint8_t opcode )
+    {
+        if( !IsShortIoOpcode( opcode ) )
+            return 0;
+
+        return ( opcode & 0x03 ) == 0x03 ? 4 : ( opcode & 0x03 ) + 1;
+    }
+
     inline std::uint32_t GetPacketLength( std::uint8_t tag_length, std::uint8_t length_low )
     {
         const std::uint32_t length = ( std::uint32_t( tag_length & 0x0f ) << 8 ) | length_low;
@@ -79,12 +98,17 @@ namespace EspiCommand
             break;
         }
 
-        if( opcode >= 0x40 && opcode <= 0x4f )
+        if( IsShortIoOpcode( opcode ) )
         {
-            const std::uint32_t address_bytes = opcode >= 0x48 ? 4 : 2;
+            const std::uint32_t data_bytes = IsShortIoWrite( opcode ) ? GetShortAccessByteCount( opcode ) : 0;
+            return 4 + data_bytes; // Opcode, 16-bit address, optional data, CRC
+        }
+
+        if( opcode >= 0x48 && opcode <= 0x4f && ( opcode & 0x03 ) != 0x02 )
+        {
             const bool is_write = ( opcode & 0x04 ) != 0;
-            const std::uint32_t data_bytes = is_write ? ( opcode & 0x03 ) + 1 : 0;
-            return 2 + address_bytes + data_bytes; // Opcode, address, optional data, CRC
+            const std::uint32_t data_bytes = is_write ? ( ( opcode & 0x03 ) == 0x03 ? 4 : ( opcode & 0x03 ) + 1 ) : 0;
+            return 6 + data_bytes; // Opcode, 32-bit address, optional data, CRC
         }
 
         return kPreviewByteCount;

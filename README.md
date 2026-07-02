@@ -12,6 +12,7 @@ A low-level Intel eSPI protocol analyzer for Saleae Logic 2.
 | Configuration | Detailed `GET_CONFIGURATION` and `SET_CONFIGURATION` output for Device Identification, General, Peripheral, Virtual Wire, OOB, and Flash registers. |
 | Status | `GET_STATUS` queue state, pending-service commands, response modifiers, and appended Virtual Wire data. |
 | Virtual Wire | `PUT_VWIRE` and `GET_VWIRE` groups. IRQ and standard system-event groups are named; other groups are shown as raw data. |
+| Short I/O | `PUT_IORD_SHORT` and `PUT_IOWR_SHORT` for 1-, 2-, and 4-byte accesses, including address, data, response, and status. |
 | Alert | Shared `ALERT#` detection on IO1 while CS# is inactive. |
 | In-band RESET | Requires all four I/O lines high for the complete 16-clock sequence before returning to Single mode. |
 | Output | Logic 2 bubbles and tables plus text/CSV export with timing, mode, byte counts, command/response previews, and decoded details. |
