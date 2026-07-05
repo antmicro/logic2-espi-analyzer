@@ -331,16 +331,17 @@ namespace
 
 	const char* GetSystemEventName( U8 index, U32 slot )
 	{
-		static const char* names[6][4] = {
+		static const char* names[7][4] = {
 			{ "SLP_S3#", "SLP_S4#", "SLP_S5#", nullptr },
 			{ "SUS_STAT#", "PLTRST#", "OOB_RST_WARN", nullptr },
 			{ "OOB_RST_ACK", nullptr, "WAKE#", "PME#" },
 			{ "TARGET_BOOT_LOAD_DONE", "ERROR_FATAL", "ERROR_NONFATAL", "TARGET_BOOT_LOAD_STATUS" },
 			{ "SCI#", "SMI#", "RCIN#", "HOST_RST_ACK" },
-			{ "HOST_RST_WARN", "SMIOUT#", "NMIOUT#", nullptr }
+			{ "HOST_RST_WARN", "SMIOUT#", "NMIOUT#", nullptr },
+			{ "NMI#", nullptr, nullptr, nullptr }
 		};
 
-		if( index < 2 || index > 7 || slot >= 4 )
+		if( index < 2 || index > 8 || slot >= 4 )
 			return nullptr;
 		return names[index - 2][slot];
 	}
