@@ -12,33 +12,16 @@ namespace
 	static constexpr U32 kPreviewCommandByteCount = EspiCommand::kPreviewByteCount;
 	static constexpr U32 kPreviewResponseByteCount = 4;
 
-	const char* GetOpcodeName( U8 opcode )
+	std::string FormatOpcodeName( U8 opcode )
 	{
-		switch( opcode )
-		{
-		case 0x25:
-			return "GET_STATUS";
-		case 0x21:
-			return "GET_CONFIGURATION";
-		case 0x22:
-			return "SET_CONFIGURATION";
-		case 0x04:
-			return "PUT_VWIRE";
-		case 0x05:
-			return "GET_VWIRE";
-		case 0x40:
-		case 0x41:
-		case 0x43:
-			return "PUT_IORD_SHORT";
-		case 0x44:
-		case 0x45:
-		case 0x47:
-			return "PUT_IOWR_SHORT";
-		case 0xff:
-			return "RESET";
-		default:
-			return "UNKNOWN_CMD";
-		}
+		const std::string name = EspiCommand::GetOpcodeName( opcode );
+		if( name != "UNKNOWN_CMD" )
+			return name;
+
+		std::ostringstream result;
+		result << name << " 0x" << std::hex << std::uppercase << std::setw( 2 )
+			   << std::setfill( '0' ) << unsigned( opcode );
+		return result.str();
 	}
 
 	const char* GetResponseName( U8 response )
@@ -545,7 +528,7 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 			const U32 rsp_b1 = rsp_preview_count >= 2 ? U32( ( frame.mData1 >> 40 ) & 0xffULL ) : 0;
 			const U32 rsp_b2 = rsp_preview_count >= 3 ? U32( ( frame.mData1 >> 48 ) & 0xffULL ) : 0;
 			const U32 rsp_b3 = rsp_preview_count >= 4 ? U32( ( frame.mData1 >> 56 ) & 0xffULL ) : 0;
-			const char* opcode_name = cmd_preview_count >= 1 ? GetOpcodeName( U8( cmd_b0 ) ) : "UNKNOWN_CMD";
+			const std::string opcode_name = cmd_preview_count >= 1 ? FormatOpcodeName( U8( cmd_b0 ) ) : "UNKNOWN_CMD";
 			const char* response_name = rsp_preview_count >= 1 ? GetResponseName( U8( rsp_b0 ) ) : "NO_RESPONSE";
 			const std::string virtual_wire_details = FormatVirtualWireDetails( transaction_details );
 			const std::string virtual_wire_details_multiline = FormatVirtualWireDetailsMultiline( transaction_details );
@@ -562,7 +545,7 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 			AddResultString( mode_str );
 
 			if( cmd_preview_count >= 1 )
-				AddResultString( opcode_name );
+				AddResultString( opcode_name.c_str() );
 			if( !configuration_details_multiline.empty() )
 				AddResultString( configuration_details_multiline.c_str() );
 			if( !status_details_multiline.empty() )
@@ -648,7 +631,7 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 #else
 			if( cmd_preview_count >= 1 )
 			{
-				AddResultString( opcode_name );
+				AddResultString( opcode_name.c_str() );
 
 				const std::string& details = !status_details_multiline.empty() ? status_details_multiline :
 					( !configuration_details_multiline.empty() ? configuration_details_multiline :
@@ -755,7 +738,7 @@ void EspiAnalyzerResults::GenerateExportFile( const char* file, DisplayBase disp
 		const U32 expected_byte_count = cmd_preview_count >= 1 ? EspiCommand::GetExpectedByteCount( U8( cmd_byte0 ), U8( cmd_byte1 ), U8( cmd_byte2 ), U8( cmd_byte3 ) ) : kPreviewCommandByteCount;
 		const U32 rsp_byte0 = rsp_preview_count >= 1 ? U32( ( frame.mData1 >> 32 ) & 0xffULL ) : 0;
 		const U32 rsp_byte1 = rsp_preview_count >= 2 ? U32( ( frame.mData1 >> 40 ) & 0xffULL ) : 0;
-		const char* opcode_name = cmd_preview_count >= 1 ? GetOpcodeName( U8( cmd_byte0 ) ) : "UNKNOWN_CMD";
+		const std::string opcode_name = cmd_preview_count >= 1 ? FormatOpcodeName( U8( cmd_byte0 ) ) : "UNKNOWN_CMD";
 		const char* response_name = rsp_preview_count >= 1 ? GetResponseName( U8( rsp_byte0 ) ) : "NO_RESPONSE";
 
 		std::ostringstream cmd_preview;
@@ -841,7 +824,7 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 	const U32 cmd_prefix32 = cmd_preview_count >= 4 ? U32( frame.mData1 & 0xffffffffULL ) : 0;
 	const U32 expected_byte_count = cmd_preview_count >= 1 ? EspiCommand::GetExpectedByteCount( U8( cmd_byte0 ), U8( cmd_byte1 ), U8( cmd_byte2 ), U8( cmd_byte3 ) ) : kPreviewCommandByteCount;
 	const U32 rsp_byte0 = rsp_preview_count >= 1 ? U32( ( frame.mData1 >> 32 ) & 0xffULL ) : 0;
-	const char* opcode_name = cmd_preview_count >= 1 ? GetOpcodeName( U8( cmd_byte0 ) ) : "UNKNOWN_CMD";
+	const std::string opcode_name = cmd_preview_count >= 1 ? FormatOpcodeName( U8( cmd_byte0 ) ) : "UNKNOWN_CMD";
 	const char* response_name = rsp_preview_count >= 1 ? GetResponseName( U8( rsp_byte0 ) ) : "NO_RESPONSE";
 		const std::string virtual_wire_details = FormatVirtualWireDetails( transaction_details );
 		const std::string virtual_wire_details_multiline = FormatVirtualWireDetailsMultiline( transaction_details );
@@ -862,7 +845,7 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 				summary,
 				sizeof( summary ),
 				"opcode=%s mode=%s rsp=%s edges=%u cmd_bytes=%u rsp_bytes=%u wait_states=%u expected=%u cmd_partial=%u rsp_partial=%u cmd_b0=%02X cmd_b1=%02X cmd32=%08X\n",
-				opcode_name,
+				opcode_name.c_str(),
 				mode_summary,
 				response_name,
 				edge_count,
@@ -882,7 +865,7 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 				summary,
 				sizeof( summary ),
 				"opcode=%s mode=%s rsp=%s edges=%u cmd_bytes=%u rsp_bytes=%u wait_states=%u expected=%u cmd_partial=%u rsp_partial=%u cmd_b0=%02X cmd_b1=%02X\n",
-				opcode_name,
+				opcode_name.c_str(),
 				mode_summary,
 				response_name,
 				edge_count,
@@ -901,7 +884,7 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 				summary,
 				sizeof( summary ),
 				"opcode=%s mode=%s rsp=%s edges=%u cmd_bytes=%u rsp_bytes=%u wait_states=%u expected=%u cmd_partial=%u rsp_partial=%u cmd_b0=%02X\n",
-				opcode_name,
+				opcode_name.c_str(),
 				mode_summary,
 				response_name,
 				edge_count,

@@ -2,6 +2,7 @@
 #include "EspiCommand.h"
 #include "EspiAnalyzerSettings.h"
 #include <AnalyzerChannelData.h>
+#include <limits>
 
 namespace
 {
@@ -104,8 +105,20 @@ void EspiAnalyzer::WorkerThread()
 
 			while( mChipSelect->GetBitState() == BIT_HIGH )
 			{
-				const U64 next_cs_edge = mChipSelect->GetSampleOfNextEdge();
-				const U64 next_alert_edge = mIo1->GetSampleOfNextEdge();
+				const bool cs_has_edge = mChipSelect->DoMoreTransitionsExistInCurrentData();
+				const bool alert_has_edge = mIo1->DoMoreTransitionsExistInCurrentData();
+				if( !cs_has_edge && !alert_has_edge )
+				{
+					// Wait for more capture data. Once either channel advances, the
+					// next pass selects the earliest available edge across both.
+					mChipSelect->GetSampleOfNextEdge();
+					continue;
+				}
+
+				const U64 next_cs_edge = cs_has_edge ? mChipSelect->GetSampleOfNextEdge() :
+					std::numeric_limits<U64>::max();
+				const U64 next_alert_edge = alert_has_edge ? mIo1->GetSampleOfNextEdge() :
+					std::numeric_limits<U64>::max();
 				if( next_alert_edge < next_cs_edge )
 				{
 					mIo1->AdvanceToNextEdge();
@@ -219,8 +232,21 @@ void EspiAnalyzer::WorkerThread()
 
 		while( mChipSelect->GetBitState() == BIT_LOW )
 		{
-			const U64 next_cs_edge = mChipSelect->GetSampleOfNextEdge();
-			const U64 next_clock_edge = mClock->GetSampleOfNextEdge();
+			const bool cs_has_edge = mChipSelect->DoMoreTransitionsExistInCurrentData();
+			const bool clock_has_edge = mClock->DoMoreTransitionsExistInCurrentData();
+			if( !cs_has_edge && !clock_has_edge )
+			{
+				// A live capture may not have supplied the next chunk yet. Wait
+				// for CS#; any clock edges received meanwhile remain pending and
+				// are selected on the next pass.
+				mChipSelect->GetSampleOfNextEdge();
+				continue;
+			}
+
+			const U64 next_cs_edge = cs_has_edge ? mChipSelect->GetSampleOfNextEdge() :
+				std::numeric_limits<U64>::max();
+			const U64 next_clock_edge = clock_has_edge ? mClock->GetSampleOfNextEdge() :
+				std::numeric_limits<U64>::max();
 
 			if( next_clock_edge < next_cs_edge )
 			{

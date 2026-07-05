@@ -7,6 +7,63 @@ namespace EspiCommand
 {
     static constexpr std::uint32_t kPreviewByteCount = 4;
 
+    inline const char* GetOpcodeName( std::uint8_t opcode )
+    {
+        switch( opcode )
+        {
+        case 0x00:
+            return "PUT_PC";
+        case 0x01:
+            return "GET_PC";
+        case 0x02:
+            return "PUT_NP";
+        case 0x03:
+            return "GET_NP";
+        case 0x04:
+            return "PUT_VWIRE";
+        case 0x05:
+            return "GET_VWIRE";
+        case 0x06:
+            return "PUT_OOB";
+        case 0x07:
+            return "GET_OOB";
+        case 0x08:
+            return "PUT_FLASH_C";
+        case 0x09:
+            return "GET_FLASH_NP";
+        case 0x0a:
+            return "PUT_FLASH_NP";
+        case 0x0b:
+            return "GET_FLASH_C";
+        case 0x21:
+            return "GET_CONFIGURATION";
+        case 0x22:
+            return "SET_CONFIGURATION";
+        case 0x25:
+            return "GET_STATUS";
+        case 0x40:
+        case 0x41:
+        case 0x43:
+            return "PUT_IORD_SHORT";
+        case 0x44:
+        case 0x45:
+        case 0x47:
+            return "PUT_IOWR_SHORT";
+        case 0x48:
+        case 0x49:
+        case 0x4b:
+            return "PUT_MEMRD32_SHORT";
+        case 0x4c:
+        case 0x4d:
+        case 0x4f:
+            return "PUT_MEMWR32_SHORT";
+        case 0xff:
+            return "RESET";
+        default:
+            return "UNKNOWN_CMD";
+        }
+    }
+
     inline bool IsShortIoOpcode( std::uint8_t opcode )
     {
         const std::uint8_t size_encoding = opcode & 0x03;

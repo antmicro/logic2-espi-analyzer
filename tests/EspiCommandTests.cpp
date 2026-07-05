@@ -1,8 +1,25 @@
 #include "EspiCommand.h"
 #include <cassert>
+#include <cstring>
 
 int main()
 {
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x00 ), "PUT_PC" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x01 ), "GET_PC" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x02 ), "PUT_NP" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x03 ), "GET_NP" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x04 ), "PUT_VWIRE" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x05 ), "GET_VWIRE" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x06 ), "PUT_OOB" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x07 ), "GET_OOB" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x08 ), "PUT_FLASH_C" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x09 ), "GET_FLASH_NP" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x0a ), "PUT_FLASH_NP" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x0b ), "GET_FLASH_C" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x48 ), "PUT_MEMRD32_SHORT" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0x4c ), "PUT_MEMWR32_SHORT" ) == 0 );
+    assert( std::strcmp( EspiCommand::GetOpcodeName( 0xfe ), "UNKNOWN_CMD" ) == 0 );
+
     assert( EspiCommand::IsShortIoOpcode( 0x40 ) );
     assert( EspiCommand::IsShortIoOpcode( 0x41 ) );
     assert( EspiCommand::IsShortIoOpcode( 0x43 ) );
