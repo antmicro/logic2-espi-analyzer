@@ -353,6 +353,16 @@ namespace
 		return names[index - 2][slot];
 	}
 
+	bool IsGpioExpanderVirtualWireIndex( U8 index )
+	{
+		return index >= 128 && index <= 225;
+	}
+
+	bool IsPlatformSpecificVirtualWireIndex( U8 index )
+	{
+		return index >= 64 && index <= 127;
+	}
+
 	std::string FormatVirtualWireGroupBrief( const EspiAnalyzerResults::VirtualWireGroup& group )
 	{
 		std::ostringstream result;
@@ -385,7 +395,13 @@ namespace
 		}
 
 		if( first_signal )
+		{
+			if( IsPlatformSpecificVirtualWireIndex( group.index ) )
+				result << "PLATFORM_SPECIFIC ";
+			else if( IsGpioExpanderVirtualWireIndex( group.index ) )
+				result << "GPIO_EXPANDER ";
 			result << "data=" << unsigned( group.data );
+		}
 
 		return result.str();
 	}
@@ -446,7 +462,13 @@ namespace
 			}
 
 			if( !any_signal )
+			{
+				if( IsPlatformSpecificVirtualWireIndex( group.index ) )
+					result << "\n    PLATFORM_SPECIFIC";
+				else if( IsGpioExpanderVirtualWireIndex( group.index ) )
+					result << "\n    GPIO_EXPANDER";
 				result << "\n    data=" << std::hex << std::uppercase << std::setw( 2 ) << std::setfill( '0' ) << unsigned( group.data );
+			}
 		}
 		return result.str();
 	}
