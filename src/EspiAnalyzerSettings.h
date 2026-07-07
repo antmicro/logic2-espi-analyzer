@@ -23,6 +23,7 @@ public:
 	Channel mIo2Channel;
 	Channel mIo3Channel;
 	U32 mInitialIoMode;
+	bool mIgnoreAlert;
 
 protected:
 	AnalyzerSettingInterfaceChannel	mClockChannelInterface;
@@ -33,6 +34,7 @@ protected:
 	AnalyzerSettingInterfaceChannel	mIo2ChannelInterface;
 	AnalyzerSettingInterfaceChannel	mIo3ChannelInterface;
 	AnalyzerSettingInterfaceNumberList mInitialIoModeInterface;
+	AnalyzerSettingInterfaceBool mIgnoreAlertInterface;
 };
 
 #endif //ESPI_ANALYZER_SETTINGS

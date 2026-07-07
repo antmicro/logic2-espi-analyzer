@@ -21,6 +21,9 @@ CLK, CS#, IO0, and IO1 are required inputs. IO2 and IO3 are optional for Single
 and Dual I/O captures, but both are required to decode Quad I/O traffic and to
 validate an in-band RESET. Use a capture rate of at least 80 MHz.
 
+Enable `Ignore ALERT#` to suppress shared IO1 alert frames from bubbles, tables,
+and text/CSV exports.
+
 ### Known limitations
 
 - Peripheral, OOB, and Flash packet boundaries are detected, but their headers,

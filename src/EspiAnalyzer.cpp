@@ -54,7 +54,8 @@ void EspiAnalyzer::SetupResults()
 	mResults.reset(new EspiAnalyzerResults( this, &mSettings ));
 	SetAnalyzerResults( mResults.get() );
 	mResults->AddChannelBubblesWillAppearOn( mSettings.mChipSelectChannel );
-	mResults->AddChannelBubblesWillAppearOn( mSettings.mIo1Channel );
+	if( !mSettings.mIgnoreAlert )
+		mResults->AddChannelBubblesWillAppearOn( mSettings.mIo1Channel );
 }
 
 void EspiAnalyzer::WorkerThread()

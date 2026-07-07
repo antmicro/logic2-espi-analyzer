@@ -11,6 +11,7 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	mIo2Channel( UNDEFINED_CHANNEL ),
 	mIo3Channel( UNDEFINED_CHANNEL ),
 	mInitialIoMode( 0 ),
+	mIgnoreAlert( false ),
 	mClockChannelInterface(),
 	mChipSelectChannelInterface(),
 	mResetChannelInterface(),
@@ -18,7 +19,8 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	mIo1ChannelInterface(),
 	mIo2ChannelInterface(),
 	mIo3ChannelInterface(),
-	mInitialIoModeInterface()
+	mInitialIoModeInterface(),
+	mIgnoreAlertInterface()
 {
 	mClockChannelInterface.SetTitleAndTooltip( "Clock", "eSPI clock line." );
 	mClockChannelInterface.SetChannel( mClockChannel );
@@ -50,6 +52,9 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	mInitialIoModeInterface.AddNumber( 2, "Quad", "Start by sampling commands and responses in Quad I/O mode." );
 	mInitialIoModeInterface.SetNumber( mInitialIoMode );
 
+	mIgnoreAlertInterface.SetCheckBoxText( "Ignore ALERT#" );
+	mIgnoreAlertInterface.SetValue( mIgnoreAlert );
+
 	AddInterface( &mClockChannelInterface );
 	AddInterface( &mChipSelectChannelInterface );
 	AddInterface( &mResetChannelInterface );
@@ -58,6 +63,7 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	AddInterface( &mIo2ChannelInterface );
 	AddInterface( &mIo3ChannelInterface );
 	AddInterface( &mInitialIoModeInterface );
+	AddInterface( &mIgnoreAlertInterface );
 
 	AddExportOption( 0, "Export as text/csv file" );
 	AddExportExtension( 0, "text", "txt" );
@@ -87,6 +93,7 @@ bool EspiAnalyzerSettings::SetSettingsFromInterfaces()
 	mIo2Channel = mIo2ChannelInterface.GetChannel();
 	mIo3Channel = mIo3ChannelInterface.GetChannel();
 	mInitialIoMode = U32( mInitialIoModeInterface.GetNumber() );
+	mIgnoreAlert = mIgnoreAlertInterface.GetValue();
 
 	if( mInitialIoMode > 2 )
 	{
@@ -121,6 +128,7 @@ void EspiAnalyzerSettings::UpdateInterfacesFromSettings()
 	mIo2ChannelInterface.SetChannel( mIo2Channel );
 	mIo3ChannelInterface.SetChannel( mIo3Channel );
 	mInitialIoModeInterface.SetNumber( mInitialIoMode );
+	mIgnoreAlertInterface.SetValue( mIgnoreAlert );
 }
 
 void EspiAnalyzerSettings::LoadSettings( const char* settings )
@@ -140,6 +148,9 @@ void EspiAnalyzerSettings::LoadSettings( const char* settings )
 	U32 initial_io_mode = 0;
 	if( text_archive >> initial_io_mode )
 		mInitialIoMode = initial_io_mode <= 2 ? initial_io_mode : 0;
+	bool ignore_alert = false;
+	if( text_archive >> ignore_alert )
+		mIgnoreAlert = ignore_alert;
 
 	ClearChannels();
 	AddChannel( mClockChannel, "CLK", true );
@@ -165,6 +176,7 @@ const char* EspiAnalyzerSettings::SaveSettings()
 	text_archive << mIo2Channel;
 	text_archive << mIo3Channel;
 	text_archive << mInitialIoMode;
+	text_archive << mIgnoreAlert;
 
 	return SetReturnString( text_archive.GetString() );
 }
