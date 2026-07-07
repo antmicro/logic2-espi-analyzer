@@ -467,7 +467,7 @@ namespace
 					result << "\n    PLATFORM_SPECIFIC";
 				else if( IsGpioExpanderVirtualWireIndex( group.index ) )
 					result << "\n    GPIO_EXPANDER";
-				result << "\n    data=" << std::hex << std::uppercase << std::setw( 2 ) << std::setfill( '0' ) << unsigned( group.data );
+				result << "\n    data=0x" << std::hex << std::uppercase << std::setw( 2 ) << std::setfill( '0' ) << unsigned( group.data );
 			}
 		}
 		return result.str();
@@ -488,7 +488,7 @@ namespace
 		{
 			const auto& group = details.virtual_wire_groups[i];
 			char group_str[32];
-			snprintf( group_str, sizeof( group_str ), "%sidx=%02X data=%02X", i == 0 ? " [" : "; ", group.index, group.data );
+			snprintf( group_str, sizeof( group_str ), "%sidx=0x%02X data=0x%02X", i == 0 ? " [" : "; ", group.index, group.data );
 			result << group_str;
 		}
 		if( !details.virtual_wire_groups.empty() )
@@ -597,22 +597,22 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 			if( cmd_preview_count >= 4 )
 			{
 				char sig4_str[32];
-				snprintf( sig4_str, sizeof( sig4_str ), "%02X %02X %02X %02X", cmd_b0, cmd_b1, cmd_b2, cmd_b3 );
+				snprintf( sig4_str, sizeof( sig4_str ), "0x%02X 0x%02X 0x%02X 0x%02X", cmd_b0, cmd_b1, cmd_b2, cmd_b3 );
 				AddResultString( sig4_str );
 
-				char sig4_labeled_str[48];
-				snprintf( sig4_labeled_str, sizeof( sig4_labeled_str ), "cmd4: %02X %02X %02X %02X", cmd_b0, cmd_b1, cmd_b2, cmd_b3 );
+				char sig4_labeled_str[64];
+				snprintf( sig4_labeled_str, sizeof( sig4_labeled_str ), "cmd4: 0x%02X 0x%02X 0x%02X 0x%02X", cmd_b0, cmd_b1, cmd_b2, cmd_b3 );
 				AddResultString( sig4_labeled_str );
 
 				char prefix32_str[32];
-				snprintf( prefix32_str, sizeof( prefix32_str ), "cmd32: %08X", cmd_prefix32 );
+				snprintf( prefix32_str, sizeof( prefix32_str ), "cmd32: 0x%08X", cmd_prefix32 );
 				AddResultString( prefix32_str );
 			}
 
 			if( cmd_preview_count >= 2 )
 			{
 				char first_two_bytes_str[32];
-				snprintf( first_two_bytes_str, sizeof( first_two_bytes_str ), "cmd0/1: %02X %02X", cmd_b0, cmd_b1 );
+				snprintf( first_two_bytes_str, sizeof( first_two_bytes_str ), "cmd0/1: 0x%02X 0x%02X", cmd_b0, cmd_b1 );
 				AddResultString( first_two_bytes_str );
 			}
 
@@ -620,11 +620,11 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 			{
 				char rsp_bytes_str[64];
 				if( rsp_preview_count >= 4 )
-					snprintf( rsp_bytes_str, sizeof( rsp_bytes_str ), "rsp: %02X %02X %02X %02X", rsp_b0, rsp_b1, rsp_b2, rsp_b3 );
+					snprintf( rsp_bytes_str, sizeof( rsp_bytes_str ), "rsp: 0x%02X 0x%02X 0x%02X 0x%02X", rsp_b0, rsp_b1, rsp_b2, rsp_b3 );
 				else if( rsp_preview_count >= 2 )
-					snprintf( rsp_bytes_str, sizeof( rsp_bytes_str ), "rsp: %02X %02X", rsp_b0, rsp_b1 );
+					snprintf( rsp_bytes_str, sizeof( rsp_bytes_str ), "rsp: 0x%02X 0x%02X", rsp_b0, rsp_b1 );
 				else
-					snprintf( rsp_bytes_str, sizeof( rsp_bytes_str ), "rsp: %02X", rsp_b0 );
+					snprintf( rsp_bytes_str, sizeof( rsp_bytes_str ), "rsp: 0x%02X", rsp_b0 );
 				AddResultString( rsp_bytes_str );
 			}
 
@@ -634,7 +634,7 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 			{
 				const U32 byte_value = U32( ( frame.mData1 >> ( i * 8 ) ) & 0xff );
 				char byte_str[16];
-				snprintf( byte_str, sizeof( byte_str ), "%02X", byte_value );
+				snprintf( byte_str, sizeof( byte_str ), "0x%02X", byte_value );
 				cmd_preview << ' ' << byte_str;
 			}
 			AddResultString( cmd_preview.str().c_str() );
@@ -645,7 +645,7 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 			{
 				const U32 byte_value = U32( ( frame.mData1 >> ( ( kPreviewCommandByteCount + i ) * 8 ) ) & 0xff );
 				char byte_str[16];
-				snprintf( byte_str, sizeof( byte_str ), "%02X", byte_value );
+				snprintf( byte_str, sizeof( byte_str ), "0x%02X", byte_value );
 				rsp_preview << ' ' << byte_str;
 			}
 			if( rsp_preview_count > 0 )
@@ -778,7 +778,7 @@ void EspiAnalyzerResults::GenerateExportFile( const char* file, DisplayBase disp
 				cmd_preview << ' ';
 			const U32 byte_value = U32( ( frame.mData1 >> ( i * 8 ) ) & 0xff );
 			char byte_str[16];
-			snprintf( byte_str, sizeof( byte_str ), "%02X", byte_value );
+			snprintf( byte_str, sizeof( byte_str ), "0x%02X", byte_value );
 			cmd_preview << byte_str;
 		}
 
@@ -789,7 +789,7 @@ void EspiAnalyzerResults::GenerateExportFile( const char* file, DisplayBase disp
 				rsp_preview << ' ';
 			const U32 byte_value = U32( ( frame.mData1 >> ( ( kPreviewCommandByteCount + i ) * 8 ) ) & 0xff );
 			char byte_str[16];
-			snprintf( byte_str, sizeof( byte_str ), "%02X", byte_value );
+			snprintf( byte_str, sizeof( byte_str ), "0x%02X", byte_value );
 			rsp_preview << byte_str;
 		}
 
@@ -799,13 +799,13 @@ void EspiAnalyzerResults::GenerateExportFile( const char* file, DisplayBase disp
 		char cmd_prefix32_str[16];
 		char rsp_byte0_str[16];
 		char rsp_byte1_str[16];
-		snprintf( cmd_byte0_str, sizeof( cmd_byte0_str ), cmd_preview_count >= 1 ? "%02X" : "" , cmd_byte0 );
-		snprintf( cmd_byte1_str, sizeof( cmd_byte1_str ), cmd_preview_count >= 2 ? "%02X" : "" , cmd_byte1 );
-		snprintf( cmd_prefix32_str, sizeof( cmd_prefix32_str ), cmd_preview_count >= 4 ? "%08X" : "" , cmd_prefix32 );
-		snprintf( rsp_byte0_str, sizeof( rsp_byte0_str ), rsp_preview_count >= 1 ? "%02X" : "" , rsp_byte0 );
-		snprintf( rsp_byte1_str, sizeof( rsp_byte1_str ), rsp_preview_count >= 2 ? "%02X" : "" , rsp_byte1 );
+		snprintf( cmd_byte0_str, sizeof( cmd_byte0_str ), cmd_preview_count >= 1 ? "0x%02X" : "" , cmd_byte0 );
+		snprintf( cmd_byte1_str, sizeof( cmd_byte1_str ), cmd_preview_count >= 2 ? "0x%02X" : "" , cmd_byte1 );
+		snprintf( cmd_prefix32_str, sizeof( cmd_prefix32_str ), cmd_preview_count >= 4 ? "0x%08X" : "" , cmd_prefix32 );
+		snprintf( rsp_byte0_str, sizeof( rsp_byte0_str ), rsp_preview_count >= 1 ? "0x%02X" : "" , rsp_byte0 );
+		snprintf( rsp_byte1_str, sizeof( rsp_byte1_str ), rsp_preview_count >= 2 ? "0x%02X" : "" , rsp_byte1 );
 		char status_str[16];
-		snprintf( status_str, sizeof( status_str ), transaction_details.has_status ? "%04X" : "", transaction_details.status );
+		snprintf( status_str, sizeof( status_str ), transaction_details.has_status ? "0x%04X" : "", transaction_details.status );
 		file_stream << time_str << "," << type_str << "," << GetIoModeName( io_mode ) << "," << GetIoModeName( next_io_mode ) << "," << edge_count << "," << cmd_byte_count << "," << rsp_byte_count << "," << wait_state_count << "," << expected_byte_count << "," << cmd_partial_bits << "," << rsp_partial_bits << "," << cmd_byte0_str << "," << cmd_byte1_str << "," << cmd_prefix32_str << "," << rsp_byte0_str << "," << rsp_byte1_str << "," << cmd_preview.str() << "," << rsp_preview.str() << "," << opcode_name << "," << response_name << "," << status_str << ",\"" << status_flags << "\"," << ( transaction_details.has_status ? GetResponseModifierName( transaction_details.response_modifier ) : "" ) << ",\"" << virtual_wire_details << "\",\"" << configuration_details << "\",\"" << short_io_details << "\"" << std::endl;
 
 		if( UpdateExportProgressAndCheckForCancel( i, num_frames ) == true )
@@ -874,7 +874,7 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 			snprintf(
 				summary,
 				sizeof( summary ),
-				"opcode=%s mode=%s rsp=%s edges=%u cmd_bytes=%u rsp_bytes=%u wait_states=%u expected=%u cmd_partial=%u rsp_partial=%u cmd_b0=%02X cmd_b1=%02X cmd32=%08X\n",
+				"opcode=%s mode=%s rsp=%s edges=%u cmd_bytes=%u rsp_bytes=%u wait_states=%u expected=%u cmd_partial=%u rsp_partial=%u cmd_b0=0x%02X cmd_b1=0x%02X cmd32=0x%08X\n",
 				opcode_name.c_str(),
 				mode_summary,
 				response_name,
@@ -894,7 +894,7 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 			snprintf(
 				summary,
 				sizeof( summary ),
-				"opcode=%s mode=%s rsp=%s edges=%u cmd_bytes=%u rsp_bytes=%u wait_states=%u expected=%u cmd_partial=%u rsp_partial=%u cmd_b0=%02X cmd_b1=%02X\n",
+				"opcode=%s mode=%s rsp=%s edges=%u cmd_bytes=%u rsp_bytes=%u wait_states=%u expected=%u cmd_partial=%u rsp_partial=%u cmd_b0=0x%02X cmd_b1=0x%02X\n",
 				opcode_name.c_str(),
 				mode_summary,
 				response_name,
@@ -913,7 +913,7 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 			snprintf(
 				summary,
 				sizeof( summary ),
-				"opcode=%s mode=%s rsp=%s edges=%u cmd_bytes=%u rsp_bytes=%u wait_states=%u expected=%u cmd_partial=%u rsp_partial=%u cmd_b0=%02X\n",
+				"opcode=%s mode=%s rsp=%s edges=%u cmd_bytes=%u rsp_bytes=%u wait_states=%u expected=%u cmd_partial=%u rsp_partial=%u cmd_b0=0x%02X\n",
 				opcode_name.c_str(),
 				mode_summary,
 				response_name,
