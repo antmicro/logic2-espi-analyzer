@@ -17,6 +17,7 @@ public:
 
 	Channel mClockChannel;
 	Channel mChipSelectChannel;
+	Channel mResetChannel;
 	Channel mIo0Channel;
 	Channel mIo1Channel;
 	Channel mIo2Channel;
@@ -26,6 +27,7 @@ public:
 protected:
 	AnalyzerSettingInterfaceChannel	mClockChannelInterface;
 	AnalyzerSettingInterfaceChannel	mChipSelectChannelInterface;
+	AnalyzerSettingInterfaceChannel	mResetChannelInterface;
 	AnalyzerSettingInterfaceChannel	mIo0ChannelInterface;
 	AnalyzerSettingInterfaceChannel	mIo1ChannelInterface;
 	AnalyzerSettingInterfaceChannel	mIo2ChannelInterface;

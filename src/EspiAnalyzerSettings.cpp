@@ -5,6 +5,7 @@
 EspiAnalyzerSettings::EspiAnalyzerSettings()
 :	mClockChannel( UNDEFINED_CHANNEL ),
 	mChipSelectChannel( UNDEFINED_CHANNEL ),
+	mResetChannel( UNDEFINED_CHANNEL ),
 	mIo0Channel( UNDEFINED_CHANNEL ),
 	mIo1Channel( UNDEFINED_CHANNEL ),
 	mIo2Channel( UNDEFINED_CHANNEL ),
@@ -12,6 +13,7 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	mInitialIoMode( 0 ),
 	mClockChannelInterface(),
 	mChipSelectChannelInterface(),
+	mResetChannelInterface(),
 	mIo0ChannelInterface(),
 	mIo1ChannelInterface(),
 	mIo2ChannelInterface(),
@@ -23,6 +25,10 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 
 	mChipSelectChannelInterface.SetTitleAndTooltip( "CS#", "Active-low eSPI chip select." );
 	mChipSelectChannelInterface.SetChannel( mChipSelectChannel );
+
+	mResetChannelInterface.SetTitleAndTooltip( "RESET#", "Optional active-low eSPI reset line. When asserted, the analyzer returns to Single I/O mode." );
+	mResetChannelInterface.SetSelectionOfNoneIsAllowed( true );
+	mResetChannelInterface.SetChannel( mResetChannel );
 
 	mIo0ChannelInterface.SetTitleAndTooltip( "IO0", "eSPI IO0 data line." );
 	mIo0ChannelInterface.SetChannel( mIo0Channel );
@@ -46,6 +52,7 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 
 	AddInterface( &mClockChannelInterface );
 	AddInterface( &mChipSelectChannelInterface );
+	AddInterface( &mResetChannelInterface );
 	AddInterface( &mIo0ChannelInterface );
 	AddInterface( &mIo1ChannelInterface );
 	AddInterface( &mIo2ChannelInterface );
@@ -59,6 +66,7 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	ClearChannels();
 	AddChannel( mClockChannel, "CLK", false );
 	AddChannel( mChipSelectChannel, "CS#", false );
+	AddChannel( mResetChannel, "RESET#", false );
 	AddChannel( mIo0Channel, "IO0", false );
 	AddChannel( mIo1Channel, "IO1", false );
 	AddChannel( mIo2Channel, "IO2", false );
@@ -73,6 +81,7 @@ bool EspiAnalyzerSettings::SetSettingsFromInterfaces()
 {
 	mClockChannel = mClockChannelInterface.GetChannel();
 	mChipSelectChannel = mChipSelectChannelInterface.GetChannel();
+	mResetChannel = mResetChannelInterface.GetChannel();
 	mIo0Channel = mIo0ChannelInterface.GetChannel();
 	mIo1Channel = mIo1ChannelInterface.GetChannel();
 	mIo2Channel = mIo2ChannelInterface.GetChannel();
@@ -93,6 +102,7 @@ bool EspiAnalyzerSettings::SetSettingsFromInterfaces()
 	ClearChannels();
 	AddChannel( mClockChannel, "CLK", true );
 	AddChannel( mChipSelectChannel, "CS#", true );
+	AddChannel( mResetChannel, "RESET#", mResetChannel != UNDEFINED_CHANNEL );
 	AddChannel( mIo0Channel, "IO0", true );
 	AddChannel( mIo1Channel, "IO1", true );
 	AddChannel( mIo2Channel, "IO2", mIo2Channel != UNDEFINED_CHANNEL );
@@ -105,6 +115,7 @@ void EspiAnalyzerSettings::UpdateInterfacesFromSettings()
 {
 	mClockChannelInterface.SetChannel( mClockChannel );
 	mChipSelectChannelInterface.SetChannel( mChipSelectChannel );
+	mResetChannelInterface.SetChannel( mResetChannel );
 	mIo0ChannelInterface.SetChannel( mIo0Channel );
 	mIo1ChannelInterface.SetChannel( mIo1Channel );
 	mIo2ChannelInterface.SetChannel( mIo2Channel );
@@ -119,6 +130,9 @@ void EspiAnalyzerSettings::LoadSettings( const char* settings )
 
 	text_archive >> mClockChannel;
 	text_archive >> mChipSelectChannel;
+	Channel reset_channel = UNDEFINED_CHANNEL;
+	if( text_archive >> reset_channel )
+		mResetChannel = reset_channel;
 	text_archive >> mIo0Channel;
 	text_archive >> mIo1Channel;
 	text_archive >> mIo2Channel;
@@ -130,6 +144,7 @@ void EspiAnalyzerSettings::LoadSettings( const char* settings )
 	ClearChannels();
 	AddChannel( mClockChannel, "CLK", true );
 	AddChannel( mChipSelectChannel, "CS#", true );
+	AddChannel( mResetChannel, "RESET#", mResetChannel != UNDEFINED_CHANNEL );
 	AddChannel( mIo0Channel, "IO0", true );
 	AddChannel( mIo1Channel, "IO1", true );
 	AddChannel( mIo2Channel, "IO2", mIo2Channel != UNDEFINED_CHANNEL );
@@ -144,6 +159,7 @@ const char* EspiAnalyzerSettings::SaveSettings()
 
 	text_archive << mClockChannel;
 	text_archive << mChipSelectChannel;
+	text_archive << mResetChannel;
 	text_archive << mIo0Channel;
 	text_archive << mIo1Channel;
 	text_archive << mIo2Channel;

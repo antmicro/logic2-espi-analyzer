@@ -33,6 +33,7 @@ EspiAnalyzer::EspiAnalyzer()
 	mSettings(),
 	mClock( nullptr ),
 	mChipSelect( nullptr ),
+	mReset( nullptr ),
 	mIo0( nullptr ),
 	mIo1( nullptr ),
 	mIo2( nullptr ),
@@ -60,6 +61,7 @@ void EspiAnalyzer::WorkerThread()
 {
 	mClock = GetAnalyzerChannelData( mSettings.mClockChannel );
 	mChipSelect = GetAnalyzerChannelData( mSettings.mChipSelectChannel );
+	mReset = mSettings.mResetChannel == UNDEFINED_CHANNEL ? nullptr : GetAnalyzerChannelData( mSettings.mResetChannel );
 	mIo0 = GetAnalyzerChannelData( mSettings.mIo0Channel );
 	mIo1 = GetAnalyzerChannelData( mSettings.mIo1Channel );
 	mIo2 = mSettings.mIo2Channel == UNDEFINED_CHANNEL ? nullptr : GetAnalyzerChannelData( mSettings.mIo2Channel );
@@ -68,8 +70,18 @@ void EspiAnalyzer::WorkerThread()
 	bool alert_armed = mIo1->GetBitState() == BIT_HIGH;
 	bool alert_asserted = false;
 	bool initial_idle_observation = mChipSelect->GetBitState() == BIT_HIGH;
+	bool have_seen_transaction = false;
+	auto ApplyExternalReset = [&]() {
+		active_io_mode = EspiIoMode::Single;
+		have_seen_transaction = false;
+		alert_asserted = false;
+		alert_armed = false;
+	};
 	U64 alert_start = 0;
 	auto EmitAlertFrame = [&]( U64 start, U64 end ) {
+		if( !have_seen_transaction )
+			return;
+
 		Frame frame;
 		frame.mType = kAlertFrame;
 		frame.mFlags = 0;
@@ -83,12 +95,24 @@ void EspiAnalyzer::WorkerThread()
 		mResults->CommitPacketAndStartNewPacket();
 		ReportProgress( end );
 	};
+	if( mReset != nullptr )
+	{
+		mReset->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
+		if( mReset->GetBitState() == BIT_LOW )
+			ApplyExternalReset();
+	}
 
 	for( ; ; )
 	{
 		if( mChipSelect->GetBitState() == BIT_HIGH )
 		{
 			mIo1->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
+			if( mReset != nullptr )
+			{
+				mReset->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
+				if( mReset->GetBitState() == BIT_LOW )
+					ApplyExternalReset();
+			}
 			if( mIo1->GetBitState() == BIT_HIGH )
 			{
 				alert_armed = true;
@@ -107,7 +131,8 @@ void EspiAnalyzer::WorkerThread()
 			{
 				const bool cs_has_edge = mChipSelect->DoMoreTransitionsExistInCurrentData();
 				const bool alert_has_edge = mIo1->DoMoreTransitionsExistInCurrentData();
-				if( !cs_has_edge && !alert_has_edge )
+				const bool reset_has_edge = mReset != nullptr && mReset->DoMoreTransitionsExistInCurrentData();
+				if( !cs_has_edge && !alert_has_edge && !reset_has_edge )
 				{
 					// Wait for more capture data. Once either channel advances, the
 					// next pass selects the earliest available edge across both.
@@ -119,8 +144,22 @@ void EspiAnalyzer::WorkerThread()
 					std::numeric_limits<U64>::max();
 				const U64 next_alert_edge = alert_has_edge ? mIo1->GetSampleOfNextEdge() :
 					std::numeric_limits<U64>::max();
+				const U64 next_reset_edge = reset_has_edge ? mReset->GetSampleOfNextEdge() :
+					std::numeric_limits<U64>::max();
 				if( next_alert_edge < next_cs_edge )
 				{
+					if( next_alert_edge >= next_reset_edge )
+					{
+						mReset->AdvanceToNextEdge();
+						mChipSelect->AdvanceToAbsPosition( mReset->GetSampleNumber() );
+						mIo1->AdvanceToAbsPosition( mReset->GetSampleNumber() );
+						if( mReset->GetBitState() == BIT_LOW )
+							ApplyExternalReset();
+						else
+							alert_armed = mIo1->GetBitState() == BIT_HIGH;
+						continue;
+					}
+
 					mIo1->AdvanceToNextEdge();
 					mChipSelect->AdvanceToAbsPosition( mIo1->GetSampleNumber() );
 					if( mIo1->GetBitState() == BIT_LOW && alert_armed )
@@ -139,8 +178,22 @@ void EspiAnalyzer::WorkerThread()
 					continue;
 				}
 
+				if( next_reset_edge < next_cs_edge )
+				{
+					mReset->AdvanceToNextEdge();
+					mChipSelect->AdvanceToAbsPosition( mReset->GetSampleNumber() );
+					mIo1->AdvanceToAbsPosition( mReset->GetSampleNumber() );
+					if( mReset->GetBitState() == BIT_LOW )
+						ApplyExternalReset();
+					else
+						alert_armed = mIo1->GetBitState() == BIT_HIGH;
+					continue;
+				}
+
 				mChipSelect->AdvanceToNextEdge();
 				mIo1->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
+				if( mReset != nullptr )
+					mReset->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
 				if( alert_asserted )
 					EmitAlertFrame( alert_start, mChipSelect->GetSampleNumber() );
 				alert_asserted = false;
@@ -155,6 +208,12 @@ void EspiAnalyzer::WorkerThread()
 		mClock->AdvanceToAbsPosition( transaction_start );
 		mIo0->AdvanceToAbsPosition( transaction_start );
 		mIo1->AdvanceToAbsPosition( transaction_start );
+		if( mReset != nullptr )
+		{
+			mReset->AdvanceToAbsPosition( transaction_start );
+			if( mReset->GetBitState() == BIT_LOW )
+				ApplyExternalReset();
+		}
 		if( mIo2 != nullptr )
 			mIo2->AdvanceToAbsPosition( transaction_start );
 		if( mIo3 != nullptr )
@@ -539,10 +598,11 @@ void EspiAnalyzer::WorkerThread()
 		mResults->CommitResults();
 		mResults->CommitPacketAndStartNewPacket();
 		ReportProgress( transaction_end );
+		have_seen_transaction = !complete_in_band_reset;
 		active_io_mode = next_io_mode;
 		alert_armed = mIo1->GetBitState() == BIT_HIGH;
+		}
 	}
-}
 
 bool EspiAnalyzer::NeedsRerun()
 {

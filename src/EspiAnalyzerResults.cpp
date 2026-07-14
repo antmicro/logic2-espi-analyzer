@@ -310,21 +310,28 @@ namespace
 			return "";
 
 		std::ostringstream result;
-		result << "  " << ( details.short_io_is_write ? "Write" : "Read" ) << ' '
+		result << "  Request: " << ( details.short_io_is_write ? "Write" : "Read" ) << ' '
 			   << std::dec << unsigned( details.short_io_size ) << ( details.short_io_size == 1 ? " byte" : " bytes" )
 			   << " @ 0x" << std::hex << std::uppercase << std::setw( 4 ) << std::setfill( '0' )
 			   << details.short_io_address;
 		if( details.short_io_has_data )
-		{
 			result << " | Data 0x" << std::setw( details.short_io_size * 2 ) << std::setfill( '0' )
 				   << details.short_io_data;
-		}
+
+		result << "\n  Response:";
+		if( details.short_io_has_data && !details.short_io_is_write )
+			result << " Data 0x" << std::setw( details.short_io_size * 2 ) << std::setfill( '0' )
+				   << details.short_io_data;
 		if( details.short_io_has_status )
 		{
-			result << "\n  Status 0x" << std::setw( 4 ) << std::setfill( '0' ) << details.short_io_status;
+			result << " Status 0x" << std::setw( 4 ) << std::setfill( '0' ) << details.short_io_status;
 			const std::string status_flags = FormatStatusFlags( details.short_io_status );
 			if( !status_flags.empty() )
 				result << " | " << status_flags;
+		}
+		else
+		{
+			result << " none";
 		}
 		return result.str();
 	}

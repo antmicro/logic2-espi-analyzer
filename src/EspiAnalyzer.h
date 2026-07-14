@@ -27,6 +27,7 @@ protected: //vars
 	std::unique_ptr<EspiAnalyzerResults> mResults;
 	AnalyzerChannelData* mClock;
 	AnalyzerChannelData* mChipSelect;
+	AnalyzerChannelData* mReset;
 	AnalyzerChannelData* mIo0;
 	AnalyzerChannelData* mIo1;
 	AnalyzerChannelData* mIo2;
