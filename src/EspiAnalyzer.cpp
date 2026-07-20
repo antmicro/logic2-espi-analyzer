@@ -9,7 +9,8 @@ namespace
 	enum EspiFrameType : U8
 	{
 		kTransactionFrame = 1,
-		kAlertFrame = 2
+		kAlertFrame = 2,
+		kInvalidChipSelectFrame = 3
 	};
 
 	static constexpr U32 kPreviewCommandByteCount = EspiCommand::kPreviewByteCount;
@@ -72,6 +73,9 @@ void EspiAnalyzer::WorkerThread()
 	bool alert_asserted = false;
 	bool initial_idle_observation = mChipSelect->GetBitState() == BIT_HIGH;
 	bool have_seen_transaction = false;
+	bool have_last_cs_deassertion = false;
+	U64 last_cs_deassertion = 0;
+	U64 observed_clock_period = 0;
 	auto ApplyExternalReset = [&]() {
 		active_io_mode = EspiIoMode::Single;
 		have_seen_transaction = false;
@@ -130,19 +134,16 @@ void EspiAnalyzer::WorkerThread()
 
 			while( mChipSelect->GetBitState() == BIT_HIGH )
 			{
-				const bool cs_has_edge = mChipSelect->DoMoreTransitionsExistInCurrentData();
-				const bool alert_has_edge = mIo1->DoMoreTransitionsExistInCurrentData();
-				const bool reset_has_edge = mReset != nullptr && mReset->DoMoreTransitionsExistInCurrentData();
-				if( !cs_has_edge && !alert_has_edge && !reset_has_edge )
-				{
-					// Wait for more capture data. Once either channel advances, the
-					// next pass selects the earliest available edge across both.
-					mChipSelect->GetSampleOfNextEdge();
-					continue;
-				}
+				// CS# is the framing signal, so establish its next edge before
+				// considering edges on independently chunked channels. Treating
+				// "not in the current data block" as no CS# edge can make
+				// AdvanceToAbsPosition() skip a complete deassert/assert pulse.
+				const U64 next_cs_edge = mChipSelect->GetSampleOfNextEdge();
+				const bool alert_has_edge =
+					mIo1->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
+				const bool reset_has_edge = mReset != nullptr &&
+					mReset->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
 
-				const U64 next_cs_edge = cs_has_edge ? mChipSelect->GetSampleOfNextEdge() :
-					std::numeric_limits<U64>::max();
 				const U64 next_alert_edge = alert_has_edge ? mIo1->GetSampleOfNextEdge() :
 					std::numeric_limits<U64>::max();
 				const U64 next_reset_edge = reset_has_edge ? mReset->GetSampleOfNextEdge() :
@@ -207,6 +208,60 @@ void EspiAnalyzer::WorkerThread()
 
 		const U64 transaction_start = mChipSelect->GetSampleNumber();
 		mClock->AdvanceToAbsPosition( transaction_start );
+
+		// CS# must be asserted while CLK is low and must remain deasserted for
+		// tSHSL, whose minimum is one clock period. Discard the complete invalid
+		// assertion so residual traffic from an aborted transaction cannot be
+		// interpreted as new commands.
+		const U64 cs_high_time = have_last_cs_deassertion ?
+			transaction_start - last_cs_deassertion : 0;
+		const bool violates_deassertion_time = have_last_cs_deassertion &&
+			observed_clock_period != 0 && cs_high_time < observed_clock_period;
+		if( mClock->GetBitState() != BIT_LOW || violates_deassertion_time )
+		{
+			const U64 invalid_start = transaction_start;
+
+			// Drain the invalid assertion using both active channels. Waiting
+			// for the framing edge first prevents an independently chunked clock
+			// channel from advancing CS# across a short deassert/assert pulse.
+			while( mChipSelect->GetBitState() == BIT_LOW )
+			{
+				const U64 next_cs_edge = mChipSelect->GetSampleOfNextEdge();
+				const bool clock_has_edge =
+					mClock->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
+
+				const U64 next_clock_edge = clock_has_edge ? mClock->GetSampleOfNextEdge() :
+					std::numeric_limits<U64>::max();
+				if( next_clock_edge < next_cs_edge )
+				{
+					mClock->AdvanceToNextEdge();
+					mChipSelect->AdvanceToAbsPosition( mClock->GetSampleNumber() );
+					continue;
+				}
+
+				mChipSelect->AdvanceToNextEdge();
+				mClock->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
+			}
+
+			const U64 invalid_end = mChipSelect->GetSampleNumber();
+
+			Frame frame;
+			frame.mType = kInvalidChipSelectFrame;
+			frame.mFlags = DISPLAY_AS_ERROR_FLAG;
+			frame.mData1 = 0;
+			frame.mData2 = 0;
+			frame.mStartingSampleInclusive = invalid_start;
+			frame.mEndingSampleInclusive = invalid_end;
+			mResults->AddTransactionDetails( EspiAnalyzerResults::TransactionDetails() );
+			mResults->AddFrame( frame );
+			mResults->CommitResults();
+			mResults->CommitPacketAndStartNewPacket();
+			ReportProgress( invalid_end );
+			have_last_cs_deassertion = true;
+			last_cs_deassertion = invalid_end;
+			continue;
+		}
+
 		mIo0->AdvanceToAbsPosition( transaction_start );
 		mIo1->AdvanceToAbsPosition( transaction_start );
 		if( mReset != nullptr )
@@ -232,6 +287,7 @@ void EspiAnalyzer::WorkerThread()
 		U32 expected_command_bytes = kPreviewCommandByteCount;
 		U32 turnaround_edge_count = 0;
 		U32 reset_high_clock_count = 0;
+		U64 last_rising_edge = 0;
 		bool reset_sequence_is_high = mIo2 != nullptr && mIo3 != nullptr;
 		U8 command_opcode = 0;
 		U8 command_byte1 = 0;
@@ -292,19 +348,13 @@ void EspiAnalyzer::WorkerThread()
 
 		while( mChipSelect->GetBitState() == BIT_LOW )
 		{
-			const bool cs_has_edge = mChipSelect->DoMoreTransitionsExistInCurrentData();
-			const bool clock_has_edge = mClock->DoMoreTransitionsExistInCurrentData();
-			if( !cs_has_edge && !clock_has_edge )
-			{
-				// A live capture may not have supplied the next chunk yet. Wait
-				// for CS#; any clock edges received meanwhile remain pending and
-				// are selected on the next pass.
-				mChipSelect->GetSampleOfNextEdge();
-				continue;
-			}
+			// Resolve the transaction boundary first. CS# and CLK use
+			// independent SDK data blocks, so CLK availability cannot prove
+			// that a CS# edge does not occur earlier.
+			const U64 next_cs_edge = mChipSelect->GetSampleOfNextEdge();
+			const bool clock_has_edge =
+				mClock->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
 
-			const U64 next_cs_edge = cs_has_edge ? mChipSelect->GetSampleOfNextEdge() :
-				std::numeric_limits<U64>::max();
 			const U64 next_clock_edge = clock_has_edge ? mClock->GetSampleOfNextEdge() :
 				std::numeric_limits<U64>::max();
 
@@ -326,11 +376,18 @@ void EspiAnalyzer::WorkerThread()
 					// ambiguous at the edge even though the captured high phase is
 					// unambiguous.
 					const U64 rising_edge_sample = mClock->GetSampleNumber();
+					if( last_rising_edge != 0 )
+						observed_clock_period = rising_edge_sample - last_rising_edge;
+					last_rising_edge = rising_edge_sample;
 					const U64 following_edge_sample = mClock->GetSampleOfNextEdge();
 					const U64 stable_phase_end = following_edge_sample < next_cs_edge ?
 						following_edge_sample : next_cs_edge;
+					// Sample at the center of the clock-high phase. Sampling at
+					// 75% was late enough for some captured data lines to begin
+					// changing before CLK fell, corrupting Quad-mode nibbles
+					// (for example, real 0x03F8 accesses appeared as 0x03FC).
 					const U64 stable_sample = rising_edge_sample +
-						( ( 3 * ( stable_phase_end - rising_edge_sample ) ) / 4 );
+						( ( stable_phase_end - rising_edge_sample ) / 2 );
 
 					if( reset_sequence_is_high )
 					{
@@ -524,6 +581,8 @@ void EspiAnalyzer::WorkerThread()
 		}
 
 		const U64 transaction_end = mChipSelect->GetSampleNumber();
+		have_last_cs_deassertion = true;
+		last_cs_deassertion = transaction_end;
 		EspiIoMode next_io_mode = active_io_mode;
 		const bool complete_in_band_reset = command_opcode == 0xff && reset_sequence_is_high &&
 			reset_high_clock_count == 16;
@@ -578,7 +637,11 @@ void EspiAnalyzer::WorkerThread()
 
 		Frame frame;
 		frame.mType = kTransactionFrame;
-		frame.mFlags = 0;
+		const bool response_expected = command_opcode != 0xff;
+		const bool truncated_transaction =
+			current_command_bit_count != 0 || captured_command_bytes < expected_command_bytes ||
+			( response_expected && ( current_response_bit_count != 0 || captured_response_bytes < 4 ) );
+		frame.mFlags = truncated_transaction ? DISPLAY_AS_ERROR_FLAG : 0;
 		frame.mData1 = preview_bytes;
 		// mData2: mode[63:62], next mode[61:60], rsp partial[59:57],
 		// cmd partial[56:54], wait states[53:48],

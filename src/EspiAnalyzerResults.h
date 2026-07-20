@@ -44,7 +44,8 @@ public:
 	enum EspiFrameType
 	{
 		TransactionFrame = 1,
-		AlertFrame = 2
+		AlertFrame = 2,
+		InvalidChipSelectFrame = 3
 	};
 
 	virtual void GenerateBubbleText( U64 frame_index, Channel& channel, DisplayBase display_base );

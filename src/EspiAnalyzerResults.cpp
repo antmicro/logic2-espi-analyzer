@@ -528,7 +528,8 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 {
 	ClearResultStrings();
 	Frame frame = GetFrame( frame_index );
-	if( ( frame.mType == TransactionFrame && channel != mSettings->mChipSelectChannel ) ||
+	if( ( ( frame.mType == TransactionFrame || frame.mType == InvalidChipSelectFrame ) &&
+			channel != mSettings->mChipSelectChannel ) ||
 		( frame.mType == AlertFrame && channel != mSettings->mIo1Channel ) )
 		return;
 	TransactionDetails transaction_details;
@@ -538,6 +539,12 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 	{
 	case TransactionFrame:
 		{
+			if( ( frame.mFlags & DISPLAY_AS_ERROR_FLAG ) != 0 )
+			{
+				AddResultString( "TRUNCATED" );
+				AddResultString( "Truncated transaction - unexpected CS# deassertion" );
+			}
+
 			const U32 edge_count = U32( frame.mData2 & 0xffffffffULL );
 			const U32 cmd_byte_count = U32( ( frame.mData2 >> 32 ) & 0xffULL );
 			const U32 rsp_byte_count = U32( ( frame.mData2 >> 40 ) & 0xffULL );
@@ -708,6 +715,11 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 		AddResultString( "ALERT# - Target requests service" );
 		break;
 
+	case InvalidChipSelectFrame:
+		AddResultString( "INVALID CS#" );
+		AddResultString( "Invalid CS# assertion - transaction discarded" );
+		break;
+
 	default:
 		AddResultString( "Unknown eSPI frame" );
 		break;
@@ -739,6 +751,19 @@ void EspiAnalyzerResults::GenerateExportFile( const char* file, DisplayBase disp
 		if( frame.mType == AlertFrame )
 		{
 			file_stream << time_str << ",alert";
+			for( U32 column = 0; column < 24; ++column )
+				file_stream << ',';
+			file_stream << std::endl;
+			if( UpdateExportProgressAndCheckForCancel( i, num_frames ) == true )
+			{
+				file_stream.close();
+				return;
+			}
+			continue;
+		}
+		if( frame.mType == InvalidChipSelectFrame )
+		{
+			file_stream << time_str << ",invalid_cs";
 			for( U32 column = 0; column < 24; ++column )
 				file_stream << ',';
 			file_stream << std::endl;
@@ -793,7 +818,9 @@ void EspiAnalyzerResults::GenerateExportFile( const char* file, DisplayBase disp
 			rsp_preview << byte_str;
 		}
 
-		const char* type_str = frame.mType == TransactionFrame ? "transaction" : "unknown";
+		const char* type_str = frame.mType == TransactionFrame ?
+			( ( frame.mFlags & DISPLAY_AS_ERROR_FLAG ) != 0 ? "truncated_transaction" : "transaction" ) :
+			"unknown";
 		char cmd_byte0_str[16];
 		char cmd_byte1_str[16];
 		char cmd_prefix32_str[16];
@@ -831,11 +858,18 @@ void EspiAnalyzerResults::GenerateFrameTabularText( U64 frame_index, DisplayBase
 		AddTabularText( "ALERT# - Target requests service\n" );
 		return;
 	}
+	if( frame.mType == InvalidChipSelectFrame )
+	{
+		AddTabularText( "Invalid CS# assertion - transaction discarded\n" );
+		return;
+	}
 	if( frame.mType != TransactionFrame )
 	{
 		AddTabularText( "unknown" );
 		return;
 	}
+	if( ( frame.mFlags & DISPLAY_AS_ERROR_FLAG ) != 0 )
+		AddTabularText( "Truncated transaction - unexpected CS# deassertion\n" );
 
 	const U32 edge_count = U32( frame.mData2 & 0xffffffffULL );
 	const U32 cmd_byte_count = U32( ( frame.mData2 >> 32 ) & 0xffULL );
