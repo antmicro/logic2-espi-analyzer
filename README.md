@@ -24,6 +24,10 @@ validate an in-band RESET. Use a capture rate of at least 80 MHz.
 Enable `Ignore ALERT#` to suppress shared IO1 alert frames from bubbles, tables,
 and text/CSV exports.
 
+Enable `Ignore PUT_IORD_SHORT` to decode those transactions for link
+synchronization without emitting bubbles, table rows, or text/CSV export rows.
+`PUT_IOWR_SHORT` transactions remain visible.
+
 ### Known limitations
 
 - Peripheral, OOB, and Flash packet boundaries are detected, but their headers,

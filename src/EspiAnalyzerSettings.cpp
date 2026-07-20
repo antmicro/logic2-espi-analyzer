@@ -12,6 +12,7 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	mIo3Channel( UNDEFINED_CHANNEL ),
 	mInitialIoMode( 0 ),
 	mIgnoreAlert( false ),
+	mIgnorePutIoReadShort( false ),
 	mClockChannelInterface(),
 	mChipSelectChannelInterface(),
 	mResetChannelInterface(),
@@ -20,7 +21,8 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	mIo2ChannelInterface(),
 	mIo3ChannelInterface(),
 	mInitialIoModeInterface(),
-	mIgnoreAlertInterface()
+	mIgnoreAlertInterface(),
+	mIgnorePutIoReadShortInterface()
 {
 	mClockChannelInterface.SetTitleAndTooltip( "Clock", "eSPI clock line." );
 	mClockChannelInterface.SetChannel( mClockChannel );
@@ -55,6 +57,9 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	mIgnoreAlertInterface.SetCheckBoxText( "Ignore ALERT#" );
 	mIgnoreAlertInterface.SetValue( mIgnoreAlert );
 
+	mIgnorePutIoReadShortInterface.SetCheckBoxText( "Ignore PUT_IORD_SHORT" );
+	mIgnorePutIoReadShortInterface.SetValue( mIgnorePutIoReadShort );
+
 	AddInterface( &mClockChannelInterface );
 	AddInterface( &mChipSelectChannelInterface );
 	AddInterface( &mResetChannelInterface );
@@ -64,6 +69,7 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	AddInterface( &mIo3ChannelInterface );
 	AddInterface( &mInitialIoModeInterface );
 	AddInterface( &mIgnoreAlertInterface );
+	AddInterface( &mIgnorePutIoReadShortInterface );
 
 	AddExportOption( 0, "Export as text/csv file" );
 	AddExportExtension( 0, "text", "txt" );
@@ -94,6 +100,7 @@ bool EspiAnalyzerSettings::SetSettingsFromInterfaces()
 	mIo3Channel = mIo3ChannelInterface.GetChannel();
 	mInitialIoMode = U32( mInitialIoModeInterface.GetNumber() );
 	mIgnoreAlert = mIgnoreAlertInterface.GetValue();
+	mIgnorePutIoReadShort = mIgnorePutIoReadShortInterface.GetValue();
 
 	if( mInitialIoMode > 2 )
 	{
@@ -129,6 +136,7 @@ void EspiAnalyzerSettings::UpdateInterfacesFromSettings()
 	mIo3ChannelInterface.SetChannel( mIo3Channel );
 	mInitialIoModeInterface.SetNumber( mInitialIoMode );
 	mIgnoreAlertInterface.SetValue( mIgnoreAlert );
+	mIgnorePutIoReadShortInterface.SetValue( mIgnorePutIoReadShort );
 }
 
 void EspiAnalyzerSettings::LoadSettings( const char* settings )
@@ -151,6 +159,9 @@ void EspiAnalyzerSettings::LoadSettings( const char* settings )
 	bool ignore_alert = false;
 	if( text_archive >> ignore_alert )
 		mIgnoreAlert = ignore_alert;
+	bool ignore_put_io_read_short = false;
+	if( text_archive >> ignore_put_io_read_short )
+		mIgnorePutIoReadShort = ignore_put_io_read_short;
 
 	ClearChannels();
 	AddChannel( mClockChannel, "CLK", true );
@@ -177,6 +188,7 @@ const char* EspiAnalyzerSettings::SaveSettings()
 	text_archive << mIo3Channel;
 	text_archive << mInitialIoMode;
 	text_archive << mIgnoreAlert;
+	text_archive << mIgnorePutIoReadShort;
 
 	return SetReturnString( text_archive.GetString() );
 }

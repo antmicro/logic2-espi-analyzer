@@ -635,32 +635,38 @@ void EspiAnalyzer::WorkerThread()
 				transaction_details.short_io_status = U16( response_tail0 ) | ( U16( response_tail1 ) << 8 );
 		}
 
-		Frame frame;
-		frame.mType = kTransactionFrame;
-		const bool response_expected = command_opcode != 0xff;
-		const bool truncated_transaction =
-			current_command_bit_count != 0 || captured_command_bytes < expected_command_bytes ||
-			( response_expected && ( current_response_bit_count != 0 || captured_response_bytes < 4 ) );
-		frame.mFlags = truncated_transaction ? DISPLAY_AS_ERROR_FLAG : 0;
-		frame.mData1 = preview_bytes;
-		// mData2: mode[63:62], next mode[61:60], rsp partial[59:57],
-		// cmd partial[56:54], wait states[53:48],
-		// response bytes[47:40], command bytes[39:32], clock edges[31:0].
-		frame.mData2 =
-			( U64( U8( active_io_mode ) & 0x03 ) << 62 ) |
-			( U64( U8( next_io_mode ) & 0x03 ) << 60 ) |
-			( U64( current_response_bit_count & 0x07 ) << 57 ) |
-			( U64( current_command_bit_count & 0x07 ) << 54 ) |
-			( U64( observed_wait_state_bytes & 0x3f ) << 48 ) |
-			( U64( captured_response_bytes & 0xff ) << 40 ) |
-			( U64( captured_command_bytes & 0xff ) << 32 ) |
-			U64( clock_edge_count & 0xffffffffULL );
-		frame.mStartingSampleInclusive = transaction_start;
-		frame.mEndingSampleInclusive = transaction_end;
-		mResults->AddTransactionDetails( transaction_details );
-		mResults->AddFrame( frame );
-		mResults->CommitResults();
-		mResults->CommitPacketAndStartNewPacket();
+		const bool ignore_transaction =
+			mSettings.mIgnorePutIoReadShort && EspiCommand::IsShortIoOpcode( command_opcode ) &&
+			!EspiCommand::IsShortIoWrite( command_opcode );
+		if( !ignore_transaction )
+		{
+			Frame frame;
+			frame.mType = kTransactionFrame;
+			const bool response_expected = command_opcode != 0xff;
+			const bool truncated_transaction =
+				current_command_bit_count != 0 || captured_command_bytes < expected_command_bytes ||
+				( response_expected && ( current_response_bit_count != 0 || captured_response_bytes < 4 ) );
+			frame.mFlags = truncated_transaction ? DISPLAY_AS_ERROR_FLAG : 0;
+			frame.mData1 = preview_bytes;
+			// mData2: mode[63:62], next mode[61:60], rsp partial[59:57],
+			// cmd partial[56:54], wait states[53:48],
+			// response bytes[47:40], command bytes[39:32], clock edges[31:0].
+			frame.mData2 =
+				( U64( U8( active_io_mode ) & 0x03 ) << 62 ) |
+				( U64( U8( next_io_mode ) & 0x03 ) << 60 ) |
+				( U64( current_response_bit_count & 0x07 ) << 57 ) |
+				( U64( current_command_bit_count & 0x07 ) << 54 ) |
+				( U64( observed_wait_state_bytes & 0x3f ) << 48 ) |
+				( U64( captured_response_bytes & 0xff ) << 40 ) |
+				( U64( captured_command_bytes & 0xff ) << 32 ) |
+				U64( clock_edge_count & 0xffffffffULL );
+			frame.mStartingSampleInclusive = transaction_start;
+			frame.mEndingSampleInclusive = transaction_end;
+			mResults->AddTransactionDetails( transaction_details );
+			mResults->AddFrame( frame );
+			mResults->CommitResults();
+			mResults->CommitPacketAndStartNewPacket();
+		}
 		ReportProgress( transaction_end );
 		have_seen_transaction = !complete_in_band_reset;
 		active_io_mode = next_io_mode;
