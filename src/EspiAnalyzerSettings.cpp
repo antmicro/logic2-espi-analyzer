@@ -6,6 +6,8 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 :	mClockChannel( UNDEFINED_CHANNEL ),
 	mChipSelectChannel( UNDEFINED_CHANNEL ),
 	mResetChannel( UNDEFINED_CHANNEL ),
+	mAlertChannel( UNDEFINED_CHANNEL ),
+	mCsGlitchFilterNs( 0 ),
 	mIo0Channel( UNDEFINED_CHANNEL ),
 	mIo1Channel( UNDEFINED_CHANNEL ),
 	mIo2Channel( UNDEFINED_CHANNEL ),
@@ -24,6 +26,14 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	mIgnoreAlertInterface(),
 	mIgnorePutIoReadShortInterface()
 {
+	mAlertChannelInterface.SetTitleAndTooltip( "ALERT# (optional)", "Dedicated active-low ALERT# input. Leave unselected to use shared IO1 alerts." );
+	mAlertChannelInterface.SetSelectionOfNoneIsAllowed( true );
+	mAlertChannelInterface.SetChannel( mAlertChannel );
+	mCsGlitchFilterNsInterface.SetTitleAndTooltip( "CS# glitch filter (ns)", "Ignore high and low CS# pulses shorter than this duration. Zero disables filtering." );
+	mCsGlitchFilterNsInterface.SetMin( 0 );
+	mCsGlitchFilterNsInterface.SetMax( 1000000000 );
+	mCsGlitchFilterNsInterface.SetInteger( mCsGlitchFilterNs );
+
 	mClockChannelInterface.SetTitleAndTooltip( "Clock", "eSPI clock line." );
 	mClockChannelInterface.SetChannel( mClockChannel );
 
@@ -63,6 +73,8 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	AddInterface( &mClockChannelInterface );
 	AddInterface( &mChipSelectChannelInterface );
 	AddInterface( &mResetChannelInterface );
+	AddInterface( &mAlertChannelInterface );
+	AddInterface( &mCsGlitchFilterNsInterface );
 	AddInterface( &mIo0ChannelInterface );
 	AddInterface( &mIo1ChannelInterface );
 	AddInterface( &mIo2ChannelInterface );
@@ -79,6 +91,7 @@ EspiAnalyzerSettings::EspiAnalyzerSettings()
 	AddChannel( mClockChannel, "CLK", false );
 	AddChannel( mChipSelectChannel, "CS#", false );
 	AddChannel( mResetChannel, "RESET#", false );
+	AddChannel( mAlertChannel, "ALERT#", false );
 	AddChannel( mIo0Channel, "IO0", false );
 	AddChannel( mIo1Channel, "IO1", false );
 	AddChannel( mIo2Channel, "IO2", false );
@@ -91,6 +104,14 @@ EspiAnalyzerSettings::~EspiAnalyzerSettings()
 
 bool EspiAnalyzerSettings::SetSettingsFromInterfaces()
 {
+	mAlertChannel = mAlertChannelInterface.GetChannel();
+	const int filter_ns = mCsGlitchFilterNsInterface.GetInteger();
+	if( filter_ns < 0 || filter_ns > 1000000000 )
+	{
+		SetErrorText( "CS# glitch filter must be between 0 and 1000000000 ns." );
+		return false;
+	}
+	mCsGlitchFilterNs = U32( filter_ns );
 	mClockChannel = mClockChannelInterface.GetChannel();
 	mChipSelectChannel = mChipSelectChannelInterface.GetChannel();
 	mResetChannel = mResetChannelInterface.GetChannel();
@@ -117,6 +138,7 @@ bool EspiAnalyzerSettings::SetSettingsFromInterfaces()
 	AddChannel( mClockChannel, "CLK", true );
 	AddChannel( mChipSelectChannel, "CS#", true );
 	AddChannel( mResetChannel, "RESET#", mResetChannel != UNDEFINED_CHANNEL );
+	AddChannel( mAlertChannel, "ALERT#", mAlertChannel != UNDEFINED_CHANNEL );
 	AddChannel( mIo0Channel, "IO0", true );
 	AddChannel( mIo1Channel, "IO1", true );
 	AddChannel( mIo2Channel, "IO2", mIo2Channel != UNDEFINED_CHANNEL );
@@ -127,6 +149,8 @@ bool EspiAnalyzerSettings::SetSettingsFromInterfaces()
 
 void EspiAnalyzerSettings::UpdateInterfacesFromSettings()
 {
+	mAlertChannelInterface.SetChannel( mAlertChannel );
+	mCsGlitchFilterNsInterface.SetInteger( mCsGlitchFilterNs );
 	mClockChannelInterface.SetChannel( mClockChannel );
 	mChipSelectChannelInterface.SetChannel( mChipSelectChannel );
 	mResetChannelInterface.SetChannel( mResetChannel );
@@ -163,10 +187,21 @@ void EspiAnalyzerSettings::LoadSettings( const char* settings )
 	if( text_archive >> ignore_put_io_read_short )
 		mIgnorePutIoReadShort = ignore_put_io_read_short;
 
+	// Append new settings so older saved configurations keep their defaults.
+	mAlertChannel = UNDEFINED_CHANNEL;
+	mCsGlitchFilterNs = 0;
+	Channel alert_channel = UNDEFINED_CHANNEL;
+	if( text_archive >> alert_channel )
+		mAlertChannel = alert_channel;
+	U32 filter_ns = 0;
+	if( text_archive >> filter_ns )
+		mCsGlitchFilterNs = filter_ns <= 1000000000 ? filter_ns : 0;
+
 	ClearChannels();
 	AddChannel( mClockChannel, "CLK", true );
 	AddChannel( mChipSelectChannel, "CS#", true );
 	AddChannel( mResetChannel, "RESET#", mResetChannel != UNDEFINED_CHANNEL );
+	AddChannel( mAlertChannel, "ALERT#", mAlertChannel != UNDEFINED_CHANNEL );
 	AddChannel( mIo0Channel, "IO0", true );
 	AddChannel( mIo1Channel, "IO1", true );
 	AddChannel( mIo2Channel, "IO2", mIo2Channel != UNDEFINED_CHANNEL );
@@ -189,6 +224,8 @@ const char* EspiAnalyzerSettings::SaveSettings()
 	text_archive << mInitialIoMode;
 	text_archive << mIgnoreAlert;
 	text_archive << mIgnorePutIoReadShort;
+	text_archive << mAlertChannel;
+	text_archive << mCsGlitchFilterNs;
 
 	return SetReturnString( text_archive.GetString() );
 }

@@ -18,6 +18,9 @@ public:
 	Channel mClockChannel;
 	Channel mChipSelectChannel;
 	Channel mResetChannel;
+	Channel mAlertChannel;
+	U32 mCsGlitchFilterNs;
+	Channel AlertChannel() const { return mAlertChannel == UNDEFINED_CHANNEL ? mIo1Channel : mAlertChannel; }
 	Channel mIo0Channel;
 	Channel mIo1Channel;
 	Channel mIo2Channel;
@@ -27,6 +30,8 @@ public:
 	bool mIgnorePutIoReadShort;
 
 protected:
+	AnalyzerSettingInterfaceChannel mAlertChannelInterface;
+	AnalyzerSettingInterfaceInteger mCsGlitchFilterNsInterface;
 	AnalyzerSettingInterfaceChannel	mClockChannelInterface;
 	AnalyzerSettingInterfaceChannel	mChipSelectChannelInterface;
 	AnalyzerSettingInterfaceChannel	mResetChannelInterface;

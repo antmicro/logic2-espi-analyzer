@@ -530,7 +530,7 @@ void EspiAnalyzerResults::GenerateBubbleText( U64 frame_index, Channel& channel,
 	Frame frame = GetFrame( frame_index );
 	if( ( ( frame.mType == TransactionFrame || frame.mType == InvalidChipSelectFrame ) &&
 			channel != mSettings->mChipSelectChannel ) ||
-		( frame.mType == AlertFrame && channel != mSettings->mIo1Channel ) )
+		( frame.mType == AlertFrame && channel != mSettings->AlertChannel() ) )
 		return;
 	TransactionDetails transaction_details;
 	GetTransactionDetails( frame_index, transaction_details );

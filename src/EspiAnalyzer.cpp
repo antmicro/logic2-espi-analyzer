@@ -1,5 +1,7 @@
 #include "EspiAnalyzer.h"
 #include "EspiCommand.h"
+#include "EspiFilteredChannel.h"
+#include "EspiAlert.h"
 #include "EspiAnalyzerSettings.h"
 #include <AnalyzerChannelData.h>
 #include <limits>
@@ -56,7 +58,7 @@ void EspiAnalyzer::SetupResults()
 	SetAnalyzerResults( mResults.get() );
 	mResults->AddChannelBubblesWillAppearOn( mSettings.mChipSelectChannel );
 	if( !mSettings.mIgnoreAlert )
-		mResults->AddChannelBubblesWillAppearOn( mSettings.mIo1Channel );
+		mResults->AddChannelBubblesWillAppearOn( mSettings.AlertChannel() );
 }
 
 void EspiAnalyzer::WorkerThread()
@@ -68,10 +70,14 @@ void EspiAnalyzer::WorkerThread()
 	mIo1 = GetAnalyzerChannelData( mSettings.mIo1Channel );
 	mIo2 = mSettings.mIo2Channel == UNDEFINED_CHANNEL ? nullptr : GetAnalyzerChannelData( mSettings.mIo2Channel );
 	mIo3 = mSettings.mIo3Channel == UNDEFINED_CHANNEL ? nullptr : GetAnalyzerChannelData( mSettings.mIo3Channel );
+	const U64 filter_samples = ( U64( mSettings.mCsGlitchFilterNs ) * GetSampleRate() + 999999999ULL ) / 1000000000ULL;
+	EspiFilteredChannel<AnalyzerChannelData> chip_select( mChipSelect, filter_samples );
+	const bool dedicated_alert = mSettings.mAlertChannel != UNDEFINED_CHANNEL;
+	AnalyzerChannelData* alert = dedicated_alert ? GetAnalyzerChannelData( mSettings.mAlertChannel ) : mIo1;
 	EspiIoMode active_io_mode = EspiIoMode( mSettings.mInitialIoMode );
-	bool alert_armed = mIo1->GetBitState() == BIT_HIGH;
+	bool alert_armed = alert->GetBitState() == BIT_HIGH;
 	bool alert_asserted = false;
-	bool initial_idle_observation = mChipSelect->GetBitState() == BIT_HIGH;
+	bool initial_idle_observation = chip_select.GetBitState() == BIT_HIGH;
 	bool have_seen_transaction = false;
 	bool have_last_cs_deassertion = false;
 	U64 last_cs_deassertion = 0;
@@ -79,12 +85,15 @@ void EspiAnalyzer::WorkerThread()
 	auto ApplyExternalReset = [&]() {
 		active_io_mode = EspiIoMode::Single;
 		have_seen_transaction = false;
-		alert_asserted = false;
-		alert_armed = false;
+		if( !dedicated_alert )
+		{
+			alert_asserted = false;
+			alert_armed = false;
+		}
 	};
 	U64 alert_start = 0;
 	auto EmitAlertFrame = [&]( U64 start, U64 end ) {
-		if( !have_seen_transaction )
+		if( mSettings.mIgnoreAlert || ( !dedicated_alert && !have_seen_transaction ) )
 			return;
 
 		Frame frame;
@@ -102,23 +111,33 @@ void EspiAnalyzer::WorkerThread()
 	};
 	if( mReset != nullptr )
 	{
-		mReset->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
+		mReset->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
 		if( mReset->GetBitState() == BIT_LOW )
 			ApplyExternalReset();
 	}
 
+	// Dedicated ALERT# remains meaningful while CS# is active. Consume every
+	// edge up to the transaction boundary, including pulses wholly inside it.
+	auto AdvanceDedicatedAlert = [&]( U64 end ) {
+		if( !dedicated_alert )
+			return;
+		EspiAdvanceAlert( alert, end, alert_asserted, alert_start, EmitAlertFrame );
+		alert_armed = alert->GetBitState() == BIT_HIGH;
+	};
+
 	for( ; ; )
 	{
-		if( mChipSelect->GetBitState() == BIT_HIGH )
+		AdvanceDedicatedAlert( chip_select.GetSampleNumber() );
+		if( chip_select.GetBitState() == BIT_HIGH )
 		{
-			mIo1->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
+			alert->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
 			if( mReset != nullptr )
 			{
-				mReset->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
+				mReset->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
 				if( mReset->GetBitState() == BIT_LOW )
 					ApplyExternalReset();
 			}
-			if( mIo1->GetBitState() == BIT_HIGH )
+			if( alert->GetBitState() == BIT_HIGH )
 			{
 				alert_armed = true;
 			}
@@ -128,52 +147,52 @@ void EspiAnalyzer::WorkerThread()
 				// decoding, require the high-to-low transition while CS# is high.
 				alert_asserted = true;
 				alert_armed = false;
-				alert_start = mChipSelect->GetSampleNumber();
+				alert_start = chip_select.GetSampleNumber();
 			}
 			initial_idle_observation = false;
 
-			while( mChipSelect->GetBitState() == BIT_HIGH )
+			while( chip_select.GetBitState() == BIT_HIGH )
 			{
 				// CS# is the framing signal, so establish its next edge before
 				// considering edges on independently chunked channels. Treating
 				// "not in the current data block" as no CS# edge can make
 				// AdvanceToAbsPosition() skip a complete deassert/assert pulse.
-				const U64 next_cs_edge = mChipSelect->GetSampleOfNextEdge();
+				const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
 				const bool alert_has_edge =
-					mIo1->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
+					alert->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
 				const bool reset_has_edge = mReset != nullptr &&
 					mReset->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
 
-				const U64 next_alert_edge = alert_has_edge ? mIo1->GetSampleOfNextEdge() :
+				const U64 next_alert_edge = alert_has_edge ? alert->GetSampleOfNextEdge() :
 					std::numeric_limits<U64>::max();
 				const U64 next_reset_edge = reset_has_edge ? mReset->GetSampleOfNextEdge() :
 					std::numeric_limits<U64>::max();
-				if( next_alert_edge < next_cs_edge )
+				if( next_alert_edge < next_cs_edge || ( dedicated_alert && next_alert_edge == next_cs_edge ) )
 				{
 					if( next_alert_edge >= next_reset_edge )
 					{
 						mReset->AdvanceToNextEdge();
-						mChipSelect->AdvanceToAbsPosition( mReset->GetSampleNumber() );
-						mIo1->AdvanceToAbsPosition( mReset->GetSampleNumber() );
+						chip_select.AdvanceToAbsPosition( mReset->GetSampleNumber() );
+						alert->AdvanceToAbsPosition( mReset->GetSampleNumber() );
 						if( mReset->GetBitState() == BIT_LOW )
 							ApplyExternalReset();
 						else
-							alert_armed = mIo1->GetBitState() == BIT_HIGH;
+							alert_armed = alert->GetBitState() == BIT_HIGH;
 						continue;
 					}
 
-					mIo1->AdvanceToNextEdge();
-					mChipSelect->AdvanceToAbsPosition( mIo1->GetSampleNumber() );
-					if( mIo1->GetBitState() == BIT_LOW && alert_armed )
+					alert->AdvanceToNextEdge();
+					chip_select.AdvanceToAbsPosition( alert->GetSampleNumber() );
+					if( alert->GetBitState() == BIT_LOW && alert_armed )
 					{
 						alert_asserted = true;
 						alert_armed = false;
-						alert_start = mIo1->GetSampleNumber();
+						alert_start = alert->GetSampleNumber();
 					}
-					else if( mIo1->GetBitState() == BIT_HIGH )
+					else if( alert->GetBitState() == BIT_HIGH )
 					{
 						if( alert_asserted )
-							EmitAlertFrame( alert_start, mIo1->GetSampleNumber() );
+							EmitAlertFrame( alert_start, alert->GetSampleNumber() );
 						alert_asserted = false;
 						alert_armed = true;
 					}
@@ -183,30 +202,33 @@ void EspiAnalyzer::WorkerThread()
 				if( next_reset_edge < next_cs_edge )
 				{
 					mReset->AdvanceToNextEdge();
-					mChipSelect->AdvanceToAbsPosition( mReset->GetSampleNumber() );
-					mIo1->AdvanceToAbsPosition( mReset->GetSampleNumber() );
+					chip_select.AdvanceToAbsPosition( mReset->GetSampleNumber() );
+					alert->AdvanceToAbsPosition( mReset->GetSampleNumber() );
 					if( mReset->GetBitState() == BIT_LOW )
 						ApplyExternalReset();
 					else
-						alert_armed = mIo1->GetBitState() == BIT_HIGH;
+						alert_armed = alert->GetBitState() == BIT_HIGH;
 					continue;
 				}
 
-				mChipSelect->AdvanceToNextEdge();
-				mIo1->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
+				chip_select.AdvanceToNextEdge();
+				alert->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
 				if( mReset != nullptr )
-					mReset->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
-				if( alert_asserted )
-					EmitAlertFrame( alert_start, mChipSelect->GetSampleNumber() );
-				alert_asserted = false;
-				alert_armed = false;
+					mReset->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
+				if( !dedicated_alert )
+				{
+					if( alert_asserted )
+						EmitAlertFrame( alert_start, chip_select.GetSampleNumber() );
+					alert_asserted = false;
+					alert_armed = false;
+				}
 			}
 		}
 
-		if( mChipSelect->GetBitState() != BIT_LOW )
+		if( chip_select.GetBitState() != BIT_LOW )
 			continue;
 
-		const U64 transaction_start = mChipSelect->GetSampleNumber();
+		const U64 transaction_start = chip_select.GetSampleNumber();
 		mClock->AdvanceToAbsPosition( transaction_start );
 
 		// CS# must be asserted while CLK is low and must remain deasserted for
@@ -224,9 +246,9 @@ void EspiAnalyzer::WorkerThread()
 			// Drain the invalid assertion using both active channels. Waiting
 			// for the framing edge first prevents an independently chunked clock
 			// channel from advancing CS# across a short deassert/assert pulse.
-			while( mChipSelect->GetBitState() == BIT_LOW )
+			while( chip_select.GetBitState() == BIT_LOW )
 			{
-				const U64 next_cs_edge = mChipSelect->GetSampleOfNextEdge();
+				const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
 				const bool clock_has_edge =
 					mClock->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
 
@@ -235,15 +257,16 @@ void EspiAnalyzer::WorkerThread()
 				if( next_clock_edge < next_cs_edge )
 				{
 					mClock->AdvanceToNextEdge();
-					mChipSelect->AdvanceToAbsPosition( mClock->GetSampleNumber() );
+					chip_select.AdvanceToAbsPosition( mClock->GetSampleNumber() );
 					continue;
 				}
 
-				mChipSelect->AdvanceToNextEdge();
-				mClock->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
+				chip_select.AdvanceToNextEdge();
+				mClock->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
 			}
 
-			const U64 invalid_end = mChipSelect->GetSampleNumber();
+			const U64 invalid_end = chip_select.GetSampleNumber();
+			AdvanceDedicatedAlert( invalid_end );
 
 			Frame frame;
 			frame.mType = kInvalidChipSelectFrame;
@@ -346,12 +369,12 @@ void EspiAnalyzer::WorkerThread()
 			return symbol;
 		};
 
-		while( mChipSelect->GetBitState() == BIT_LOW )
+		while( chip_select.GetBitState() == BIT_LOW )
 		{
 			// Resolve the transaction boundary first. CS# and CLK use
 			// independent SDK data blocks, so CLK availability cannot prove
 			// that a CS# edge does not occur earlier.
-			const U64 next_cs_edge = mChipSelect->GetSampleOfNextEdge();
+			const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
 			const bool clock_has_edge =
 				mClock->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
 
@@ -361,9 +384,9 @@ void EspiAnalyzer::WorkerThread()
 			if( next_clock_edge < next_cs_edge )
 			{
 				mClock->AdvanceToNextEdge();
-				mChipSelect->AdvanceToAbsPosition( mClock->GetSampleNumber() );
+				chip_select.AdvanceToAbsPosition( mClock->GetSampleNumber() );
 
-				if( mChipSelect->GetBitState() == BIT_LOW )
+				if( chip_select.GetBitState() == BIT_LOW )
 				{
 					++clock_edge_count;
 
@@ -570,9 +593,11 @@ void EspiAnalyzer::WorkerThread()
 				continue;
 			}
 
-			mChipSelect->AdvanceToNextEdge();
-			mClock->AdvanceToAbsPosition( mChipSelect->GetSampleNumber() );
+			chip_select.AdvanceToNextEdge();
+			mClock->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
 		}
+
+		AdvanceDedicatedAlert( chip_select.GetSampleNumber() );
 
 		if( ( clock_edge_count == 0 ) && ( captured_command_bytes == 0 ) && ( captured_response_bytes == 0 ) &&
 			( current_command_bit_count == 0 ) && ( current_response_bit_count == 0 ) && ( observed_wait_state_bytes == 0 ) )
@@ -580,7 +605,7 @@ void EspiAnalyzer::WorkerThread()
 			continue;
 		}
 
-		const U64 transaction_end = mChipSelect->GetSampleNumber();
+		const U64 transaction_end = chip_select.GetSampleNumber();
 		have_last_cs_deassertion = true;
 		last_cs_deassertion = transaction_end;
 		EspiIoMode next_io_mode = active_io_mode;
@@ -670,7 +695,7 @@ void EspiAnalyzer::WorkerThread()
 		ReportProgress( transaction_end );
 		have_seen_transaction = !complete_in_band_reset;
 		active_io_mode = next_io_mode;
-		alert_armed = mIo1->GetBitState() == BIT_HIGH;
+		alert_armed = alert->GetBitState() == BIT_HIGH;
 		}
 	}
 
