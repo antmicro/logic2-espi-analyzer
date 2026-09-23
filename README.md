@@ -86,3 +86,7 @@ Shared IO1 alerts are ignored until the first transaction, both at capture start
 
 * [Intel eSPI Interface Base Specification, revision 1.6](https://cdrdv2-public.intel.com/841685/841685_ESPI_IBS_TS_Rev_1_6.pdf)
 * [Saleae Analyzer SDK](https://github.com/saleae/AnalyzerSDK)
+
+## License
+
+This project is licensed under the [Apache License, Version 2.0](LICENSE).
