@@ -5,17 +5,17 @@
 #include <string>
 class EspiAnalyzerSettings;
 
-class EspiSimulationDataGenerator
-{
+class EspiSimulationDataGenerator {
 public:
-	EspiSimulationDataGenerator();
-	~EspiSimulationDataGenerator();
+  EspiSimulationDataGenerator();
+  ~EspiSimulationDataGenerator();
 
-	void Initialize( U32 simulation_sample_rate, EspiAnalyzerSettings* settings );
-	U32 GenerateSimulationData( U64 newest_sample_requested, U32 sample_rate, SimulationChannelDescriptor** simulation_channel );
+  void Initialize(U32 simulation_sample_rate, EspiAnalyzerSettings *settings);
+  U32 GenerateSimulationData(U64 newest_sample_requested, U32 sample_rate,
+                             SimulationChannelDescriptor **simulation_channel);
 
 protected:
-	EspiAnalyzerSettings* mSettings;
-	U32 mSimulationSampleRateHz;
+  EspiAnalyzerSettings *mSettings;
+  U32 mSimulationSampleRateHz;
 };
-#endif //ESPI_SIMULATION_DATA_GENERATOR
+#endif // ESPI_SIMULATION_DATA_GENERATOR

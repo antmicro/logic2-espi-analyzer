@@ -4,44 +4,45 @@
 #include <AnalyzerSettings.h>
 #include <AnalyzerTypes.h>
 
-class EspiAnalyzerSettings : public AnalyzerSettings
-{
+class EspiAnalyzerSettings : public AnalyzerSettings {
 public:
-	EspiAnalyzerSettings();
-	virtual ~EspiAnalyzerSettings();
+  EspiAnalyzerSettings();
+  virtual ~EspiAnalyzerSettings();
 
-	virtual bool SetSettingsFromInterfaces();
-	void UpdateInterfacesFromSettings();
-	virtual void LoadSettings( const char* settings );
-	virtual const char* SaveSettings();
+  virtual bool SetSettingsFromInterfaces();
+  void UpdateInterfacesFromSettings();
+  virtual void LoadSettings(const char *settings);
+  virtual const char *SaveSettings();
 
-	Channel mClockChannel;
-	Channel mChipSelectChannel;
-	Channel mResetChannel;
-	Channel mAlertChannel;
-	U32 mCsGlitchFilterNs;
-	Channel AlertChannel() const { return mAlertChannel == UNDEFINED_CHANNEL ? mIo1Channel : mAlertChannel; }
-	Channel mIo0Channel;
-	Channel mIo1Channel;
-	Channel mIo2Channel;
-	Channel mIo3Channel;
-	U32 mInitialIoMode;
-	bool mIgnoreAlert;
-	bool mIgnorePutIoReadShort;
+  Channel mClockChannel;
+  Channel mChipSelectChannel;
+  Channel mResetChannel;
+  Channel mAlertChannel;
+  U32 mCsGlitchFilterNs;
+  Channel AlertChannel() const {
+    return mAlertChannel == UNDEFINED_CHANNEL ? mIo1Channel : mAlertChannel;
+  }
+  Channel mIo0Channel;
+  Channel mIo1Channel;
+  Channel mIo2Channel;
+  Channel mIo3Channel;
+  U32 mInitialIoMode;
+  bool mIgnoreAlert;
+  bool mIgnorePutIoReadShort;
 
 protected:
-	AnalyzerSettingInterfaceChannel mAlertChannelInterface;
-	AnalyzerSettingInterfaceInteger mCsGlitchFilterNsInterface;
-	AnalyzerSettingInterfaceChannel	mClockChannelInterface;
-	AnalyzerSettingInterfaceChannel	mChipSelectChannelInterface;
-	AnalyzerSettingInterfaceChannel	mResetChannelInterface;
-	AnalyzerSettingInterfaceChannel	mIo0ChannelInterface;
-	AnalyzerSettingInterfaceChannel	mIo1ChannelInterface;
-	AnalyzerSettingInterfaceChannel	mIo2ChannelInterface;
-	AnalyzerSettingInterfaceChannel	mIo3ChannelInterface;
-	AnalyzerSettingInterfaceNumberList mInitialIoModeInterface;
-	AnalyzerSettingInterfaceBool mIgnoreAlertInterface;
-	AnalyzerSettingInterfaceBool mIgnorePutIoReadShortInterface;
+  AnalyzerSettingInterfaceChannel mAlertChannelInterface;
+  AnalyzerSettingInterfaceInteger mCsGlitchFilterNsInterface;
+  AnalyzerSettingInterfaceChannel mClockChannelInterface;
+  AnalyzerSettingInterfaceChannel mChipSelectChannelInterface;
+  AnalyzerSettingInterfaceChannel mResetChannelInterface;
+  AnalyzerSettingInterfaceChannel mIo0ChannelInterface;
+  AnalyzerSettingInterfaceChannel mIo1ChannelInterface;
+  AnalyzerSettingInterfaceChannel mIo2ChannelInterface;
+  AnalyzerSettingInterfaceChannel mIo3ChannelInterface;
+  AnalyzerSettingInterfaceNumberList mInitialIoModeInterface;
+  AnalyzerSettingInterfaceBool mIgnoreAlertInterface;
+  AnalyzerSettingInterfaceBool mIgnorePutIoReadShortInterface;
 };
 
-#endif //ESPI_ANALYZER_SETTINGS
+#endif // ESPI_ANALYZER_SETTINGS

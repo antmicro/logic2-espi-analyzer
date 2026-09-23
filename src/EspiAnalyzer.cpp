@@ -1,741 +1,701 @@
 #include "EspiAnalyzer.h"
-#include "EspiCommand.h"
-#include "EspiFilteredChannel.h"
 #include "EspiAlert.h"
 #include "EspiAnalyzerSettings.h"
+#include "EspiCommand.h"
+#include "EspiFilteredChannel.h"
 #include <AnalyzerChannelData.h>
 #include <limits>
 
-namespace
-{
-	enum EspiFrameType : U8
-	{
-		kTransactionFrame = 1,
-		kAlertFrame = 2,
-		kInvalidChipSelectFrame = 3
-	};
+namespace {
+enum EspiFrameType : U8 {
+  kTransactionFrame = 1,
+  kAlertFrame = 2,
+  kInvalidChipSelectFrame = 3
+};
 
-	static constexpr U32 kPreviewCommandByteCount = EspiCommand::kPreviewByteCount;
-	static constexpr U32 kPreviewResponseByteCount = 4;
+static constexpr U32 kPreviewCommandByteCount = EspiCommand::kPreviewByteCount;
+static constexpr U32 kPreviewResponseByteCount = 4;
 
-	enum class EspiIoMode : U8
-	{
-		Single = 0,
-		Dual = 1,
-		Quad = 2
-	};
+enum class EspiIoMode : U8 { Single = 0, Dual = 1, Quad = 2 };
 
-	bool IsAcceptResponse( U8 response )
-	{
-		return ( response & 0x0f ) == 0x08 && ( response & 0x30 ) == 0x00;
-	}
+bool IsAcceptResponse(U8 response) {
+  return (response & 0x0f) == 0x08 && (response & 0x30) == 0x00;
 }
+} // namespace
 
 EspiAnalyzer::EspiAnalyzer()
-:	Analyzer2(),  
-	mSettings(),
-	mClock( nullptr ),
-	mChipSelect( nullptr ),
-	mReset( nullptr ),
-	mIo0( nullptr ),
-	mIo1( nullptr ),
-	mIo2( nullptr ),
-	mIo3( nullptr ),
-	mSimulationInitilized( false )
-{
-	SetAnalyzerSettings( &mSettings );
+    : Analyzer2(), mSettings(), mClock(nullptr), mChipSelect(nullptr),
+      mReset(nullptr), mIo0(nullptr), mIo1(nullptr), mIo2(nullptr),
+      mIo3(nullptr), mSimulationInitilized(false) {
+  SetAnalyzerSettings(&mSettings);
 }
 
-EspiAnalyzer::~EspiAnalyzer()
-{
-	KillThread();
+EspiAnalyzer::~EspiAnalyzer() { KillThread(); }
+
+void EspiAnalyzer::SetupResults() {
+  // SetupResults is called each time the analyzer is run. Because the same
+  // instance can be used for multiple runs, we need to clear the results each
+  // time.
+  mResults.reset(new EspiAnalyzerResults(this, &mSettings));
+  SetAnalyzerResults(mResults.get());
+  mResults->AddChannelBubblesWillAppearOn(mSettings.mChipSelectChannel);
+  if (!mSettings.mIgnoreAlert)
+    mResults->AddChannelBubblesWillAppearOn(mSettings.AlertChannel());
 }
 
-void EspiAnalyzer::SetupResults()
-{
-	// SetupResults is called each time the analyzer is run. Because the same instance can be used for multiple runs, we need to clear the results each time.
-	mResults.reset(new EspiAnalyzerResults( this, &mSettings ));
-	SetAnalyzerResults( mResults.get() );
-	mResults->AddChannelBubblesWillAppearOn( mSettings.mChipSelectChannel );
-	if( !mSettings.mIgnoreAlert )
-		mResults->AddChannelBubblesWillAppearOn( mSettings.AlertChannel() );
+void EspiAnalyzer::WorkerThread() {
+  mClock = GetAnalyzerChannelData(mSettings.mClockChannel);
+  mChipSelect = GetAnalyzerChannelData(mSettings.mChipSelectChannel);
+  mReset = mSettings.mResetChannel == UNDEFINED_CHANNEL
+               ? nullptr
+               : GetAnalyzerChannelData(mSettings.mResetChannel);
+  mIo0 = GetAnalyzerChannelData(mSettings.mIo0Channel);
+  mIo1 = GetAnalyzerChannelData(mSettings.mIo1Channel);
+  mIo2 = mSettings.mIo2Channel == UNDEFINED_CHANNEL
+             ? nullptr
+             : GetAnalyzerChannelData(mSettings.mIo2Channel);
+  mIo3 = mSettings.mIo3Channel == UNDEFINED_CHANNEL
+             ? nullptr
+             : GetAnalyzerChannelData(mSettings.mIo3Channel);
+  const U64 filter_samples =
+      (U64(mSettings.mCsGlitchFilterNs) * GetSampleRate() + 999999999ULL) /
+      1000000000ULL;
+  EspiFilteredChannel<AnalyzerChannelData> chip_select(mChipSelect,
+                                                       filter_samples);
+  const bool dedicated_alert = mSettings.mAlertChannel != UNDEFINED_CHANNEL;
+  AnalyzerChannelData *alert =
+      dedicated_alert ? GetAnalyzerChannelData(mSettings.mAlertChannel) : mIo1;
+  EspiIoMode active_io_mode = EspiIoMode(mSettings.mInitialIoMode);
+  bool alert_armed = alert->GetBitState() == BIT_HIGH;
+  bool alert_asserted = false;
+  bool initial_idle_observation = chip_select.GetBitState() == BIT_HIGH;
+  bool have_seen_transaction = false;
+  bool have_last_cs_deassertion = false;
+  U64 last_cs_deassertion = 0;
+  U64 observed_clock_period = 0;
+  auto ApplyExternalReset = [&]() {
+    active_io_mode = EspiIoMode::Single;
+    have_seen_transaction = false;
+    if (!dedicated_alert) {
+      alert_asserted = false;
+      alert_armed = false;
+    }
+  };
+  U64 alert_start = 0;
+  auto EmitAlertFrame = [&](U64 start, U64 end) {
+    if (mSettings.mIgnoreAlert || (!dedicated_alert && !have_seen_transaction))
+      return;
+
+    Frame frame;
+    frame.mType = kAlertFrame;
+    frame.mFlags = 0;
+    frame.mData1 = 0;
+    frame.mData2 = 0;
+    frame.mStartingSampleInclusive = start;
+    frame.mEndingSampleInclusive = end;
+    mResults->AddTransactionDetails(EspiAnalyzerResults::TransactionDetails());
+    mResults->AddFrame(frame);
+    mResults->CommitResults();
+    mResults->CommitPacketAndStartNewPacket();
+    ReportProgress(end);
+  };
+  if (mReset != nullptr) {
+    mReset->AdvanceToAbsPosition(chip_select.GetSampleNumber());
+    if (mReset->GetBitState() == BIT_LOW)
+      ApplyExternalReset();
+  }
+
+  // Dedicated ALERT# remains meaningful while CS# is active. Consume every
+  // edge up to the transaction boundary, including pulses wholly inside it.
+  auto AdvanceDedicatedAlert = [&](U64 end) {
+    if (!dedicated_alert)
+      return;
+    EspiAdvanceAlert(alert, end, alert_asserted, alert_start, EmitAlertFrame);
+    alert_armed = alert->GetBitState() == BIT_HIGH;
+  };
+
+  for (;;) {
+    AdvanceDedicatedAlert(chip_select.GetSampleNumber());
+    if (chip_select.GetBitState() == BIT_HIGH) {
+      alert->AdvanceToAbsPosition(chip_select.GetSampleNumber());
+      if (mReset != nullptr) {
+        mReset->AdvanceToAbsPosition(chip_select.GetSampleNumber());
+        if (mReset->GetBitState() == BIT_LOW)
+          ApplyExternalReset();
+      }
+      if (alert->GetBitState() == BIT_HIGH) {
+        alert_armed = true;
+      } else if (initial_idle_observation && !alert_asserted) {
+        // A capture may begin after ALERT# was asserted. During normal
+        // decoding, require the high-to-low transition while CS# is high.
+        alert_asserted = true;
+        alert_armed = false;
+        alert_start = chip_select.GetSampleNumber();
+      }
+      initial_idle_observation = false;
+
+      while (chip_select.GetBitState() == BIT_HIGH) {
+        // CS# is the framing signal, so establish its next edge before
+        // considering edges on independently chunked channels. Treating
+        // "not in the current data block" as no CS# edge can make
+        // AdvanceToAbsPosition() skip a complete deassert/assert pulse.
+        const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
+        const bool alert_has_edge =
+            alert->WouldAdvancingToAbsPositionCauseTransition(next_cs_edge);
+        const bool reset_has_edge =
+            mReset != nullptr &&
+            mReset->WouldAdvancingToAbsPositionCauseTransition(next_cs_edge);
+
+        const U64 next_alert_edge = alert_has_edge
+                                        ? alert->GetSampleOfNextEdge()
+                                        : std::numeric_limits<U64>::max();
+        const U64 next_reset_edge = reset_has_edge
+                                        ? mReset->GetSampleOfNextEdge()
+                                        : std::numeric_limits<U64>::max();
+        if (next_alert_edge < next_cs_edge ||
+            (dedicated_alert && next_alert_edge == next_cs_edge)) {
+          if (next_alert_edge >= next_reset_edge) {
+            mReset->AdvanceToNextEdge();
+            chip_select.AdvanceToAbsPosition(mReset->GetSampleNumber());
+            alert->AdvanceToAbsPosition(mReset->GetSampleNumber());
+            if (mReset->GetBitState() == BIT_LOW)
+              ApplyExternalReset();
+            else
+              alert_armed = alert->GetBitState() == BIT_HIGH;
+            continue;
+          }
+
+          alert->AdvanceToNextEdge();
+          chip_select.AdvanceToAbsPosition(alert->GetSampleNumber());
+          if (alert->GetBitState() == BIT_LOW && alert_armed) {
+            alert_asserted = true;
+            alert_armed = false;
+            alert_start = alert->GetSampleNumber();
+          } else if (alert->GetBitState() == BIT_HIGH) {
+            if (alert_asserted)
+              EmitAlertFrame(alert_start, alert->GetSampleNumber());
+            alert_asserted = false;
+            alert_armed = true;
+          }
+          continue;
+        }
+
+        if (next_reset_edge < next_cs_edge) {
+          mReset->AdvanceToNextEdge();
+          chip_select.AdvanceToAbsPosition(mReset->GetSampleNumber());
+          alert->AdvanceToAbsPosition(mReset->GetSampleNumber());
+          if (mReset->GetBitState() == BIT_LOW)
+            ApplyExternalReset();
+          else
+            alert_armed = alert->GetBitState() == BIT_HIGH;
+          continue;
+        }
+
+        chip_select.AdvanceToNextEdge();
+        alert->AdvanceToAbsPosition(chip_select.GetSampleNumber());
+        if (mReset != nullptr)
+          mReset->AdvanceToAbsPosition(chip_select.GetSampleNumber());
+        if (!dedicated_alert) {
+          if (alert_asserted)
+            EmitAlertFrame(alert_start, chip_select.GetSampleNumber());
+          alert_asserted = false;
+          alert_armed = false;
+        }
+      }
+    }
+
+    if (chip_select.GetBitState() != BIT_LOW)
+      continue;
+
+    const U64 transaction_start = chip_select.GetSampleNumber();
+    mClock->AdvanceToAbsPosition(transaction_start);
+
+    // CS# must be asserted while CLK is low and must remain deasserted for
+    // tSHSL, whose minimum is one clock period. Discard the complete invalid
+    // assertion so residual traffic from an aborted transaction cannot be
+    // interpreted as new commands.
+    const U64 cs_high_time =
+        have_last_cs_deassertion ? transaction_start - last_cs_deassertion : 0;
+    const bool violates_deassertion_time = have_last_cs_deassertion &&
+                                           observed_clock_period != 0 &&
+                                           cs_high_time < observed_clock_period;
+    if (mClock->GetBitState() != BIT_LOW || violates_deassertion_time) {
+      const U64 invalid_start = transaction_start;
+
+      // Drain the invalid assertion using both active channels. Waiting
+      // for the framing edge first prevents an independently chunked clock
+      // channel from advancing CS# across a short deassert/assert pulse.
+      while (chip_select.GetBitState() == BIT_LOW) {
+        const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
+        const bool clock_has_edge =
+            mClock->WouldAdvancingToAbsPositionCauseTransition(next_cs_edge);
+
+        const U64 next_clock_edge = clock_has_edge
+                                        ? mClock->GetSampleOfNextEdge()
+                                        : std::numeric_limits<U64>::max();
+        if (next_clock_edge < next_cs_edge) {
+          mClock->AdvanceToNextEdge();
+          chip_select.AdvanceToAbsPosition(mClock->GetSampleNumber());
+          continue;
+        }
+
+        chip_select.AdvanceToNextEdge();
+        mClock->AdvanceToAbsPosition(chip_select.GetSampleNumber());
+      }
+
+      const U64 invalid_end = chip_select.GetSampleNumber();
+      AdvanceDedicatedAlert(invalid_end);
+
+      Frame frame;
+      frame.mType = kInvalidChipSelectFrame;
+      frame.mFlags = DISPLAY_AS_ERROR_FLAG;
+      frame.mData1 = 0;
+      frame.mData2 = 0;
+      frame.mStartingSampleInclusive = invalid_start;
+      frame.mEndingSampleInclusive = invalid_end;
+      mResults->AddTransactionDetails(
+          EspiAnalyzerResults::TransactionDetails());
+      mResults->AddFrame(frame);
+      mResults->CommitResults();
+      mResults->CommitPacketAndStartNewPacket();
+      ReportProgress(invalid_end);
+      have_last_cs_deassertion = true;
+      last_cs_deassertion = invalid_end;
+      continue;
+    }
+
+    mIo0->AdvanceToAbsPosition(transaction_start);
+    mIo1->AdvanceToAbsPosition(transaction_start);
+    if (mReset != nullptr) {
+      mReset->AdvanceToAbsPosition(transaction_start);
+      if (mReset->GetBitState() == BIT_LOW)
+        ApplyExternalReset();
+    }
+    if (mIo2 != nullptr)
+      mIo2->AdvanceToAbsPosition(transaction_start);
+    if (mIo3 != nullptr)
+      mIo3->AdvanceToAbsPosition(transaction_start);
+
+    U64 clock_edge_count = 0;
+    U64 preview_bytes = 0;
+    U8 current_command_byte = 0;
+    U8 current_response_byte = 0;
+    U32 current_command_bit_count = 0;
+    U32 current_response_bit_count = 0;
+    U32 captured_command_bytes = 0;
+    U32 captured_response_bytes = 0;
+    U32 observed_wait_state_bytes = 0;
+    U32 expected_command_bytes = kPreviewCommandByteCount;
+    U32 turnaround_edge_count = 0;
+    U32 reset_high_clock_count = 0;
+    U64 last_rising_edge = 0;
+    bool reset_sequence_is_high = mIo2 != nullptr && mIo3 != nullptr;
+    U8 command_opcode = 0;
+    U8 command_byte1 = 0;
+    U8 command_byte2 = 0;
+    U8 command_byte3 = 0;
+    U16 configuration_address = 0;
+    U32 configuration_value = 0;
+    U8 first_response_byte = 0xff;
+    U8 response_tail0 = 0;
+    U8 response_tail1 = 0;
+    U8 response_tail2 = 0;
+    U8 pending_virtual_wire_index = 0;
+    EspiAnalyzerResults::TransactionDetails transaction_details;
+    const U32 bits_per_clock =
+        active_io_mode == EspiIoMode::Quad
+            ? 4
+            : (active_io_mode == EspiIoMode::Dual ? 2 : 1);
+
+    enum class Phase { Command, Turnaround, ResponseWaitState, ResponseData };
+
+    Phase phase = Phase::Command;
+    auto RecordResponseByte = [&](U8 value) {
+      response_tail0 = response_tail1;
+      response_tail1 = response_tail2;
+      response_tail2 = value;
+    };
+    auto SampleSymbol = [&](bool response_phase, U64 sample) -> U8 {
+      if (active_io_mode == EspiIoMode::Single) {
+        AnalyzerChannelData *data = response_phase ? mIo1 : mIo0;
+        data->AdvanceToAbsPosition(sample);
+        return data->GetBitState() == BIT_HIGH ? 1 : 0;
+      }
+
+      mIo0->AdvanceToAbsPosition(sample);
+      mIo1->AdvanceToAbsPosition(sample);
+      U8 symbol = 0;
+      if (mIo0->GetBitState() == BIT_HIGH)
+        symbol |= 0x1;
+      if (mIo1->GetBitState() == BIT_HIGH)
+        symbol |= 0x2;
+
+      if (active_io_mode == EspiIoMode::Quad) {
+        mIo2->AdvanceToAbsPosition(sample);
+        mIo3->AdvanceToAbsPosition(sample);
+        if (mIo2->GetBitState() == BIT_HIGH)
+          symbol |= 0x4;
+        if (mIo3->GetBitState() == BIT_HIGH)
+          symbol |= 0x8;
+      }
+
+      return symbol;
+    };
+
+    while (chip_select.GetBitState() == BIT_LOW) {
+      // Resolve the transaction boundary first. CS# and CLK use
+      // independent SDK data blocks, so CLK availability cannot prove
+      // that a CS# edge does not occur earlier.
+      const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
+      const bool clock_has_edge =
+          mClock->WouldAdvancingToAbsPositionCauseTransition(next_cs_edge);
+
+      const U64 next_clock_edge = clock_has_edge
+                                      ? mClock->GetSampleOfNextEdge()
+                                      : std::numeric_limits<U64>::max();
+
+      if (next_clock_edge < next_cs_edge) {
+        mClock->AdvanceToNextEdge();
+        chip_select.AdvanceToAbsPosition(mClock->GetSampleNumber());
+
+        if (chip_select.GetBitState() == BIT_LOW) {
+          ++clock_edge_count;
+
+          if (mClock->GetBitState() != BIT_HIGH)
+            continue;
+
+          // Sample inside the stable high phase rather than exactly at the
+          // rising-edge timestamp. Logic 2 can assign simultaneous clock and
+          // data transitions to the same sample, making their ordering
+          // ambiguous at the edge even though the captured high phase is
+          // unambiguous.
+          const U64 rising_edge_sample = mClock->GetSampleNumber();
+          if (last_rising_edge != 0)
+            observed_clock_period = rising_edge_sample - last_rising_edge;
+          last_rising_edge = rising_edge_sample;
+          const U64 following_edge_sample = mClock->GetSampleOfNextEdge();
+          const U64 stable_phase_end = following_edge_sample < next_cs_edge
+                                           ? following_edge_sample
+                                           : next_cs_edge;
+          // Sample at the center of the clock-high phase. Sampling at
+          // 75% was late enough for some captured data lines to begin
+          // changing before CLK fell, corrupting Quad-mode nibbles
+          // (for example, real 0x03F8 accesses appeared as 0x03FC).
+          const U64 stable_sample =
+              rising_edge_sample +
+              ((stable_phase_end - rising_edge_sample) / 2);
+
+          if (reset_sequence_is_high) {
+            mIo0->AdvanceToAbsPosition(stable_sample);
+            mIo1->AdvanceToAbsPosition(stable_sample);
+            mIo2->AdvanceToAbsPosition(stable_sample);
+            mIo3->AdvanceToAbsPosition(stable_sample);
+            reset_sequence_is_high = mIo0->GetBitState() == BIT_HIGH &&
+                                     mIo1->GetBitState() == BIT_HIGH &&
+                                     mIo2->GetBitState() == BIT_HIGH &&
+                                     mIo3->GetBitState() == BIT_HIGH;
+            if (reset_sequence_is_high)
+              ++reset_high_clock_count;
+          }
+
+          if (phase == Phase::Command) {
+            current_command_byte = U8((current_command_byte << bits_per_clock) |
+                                      SampleSymbol(false, stable_sample));
+
+            current_command_bit_count += bits_per_clock;
+            if (current_command_bit_count == 8) {
+              const U32 command_byte_index = captured_command_bytes;
+              if (captured_command_bytes < kPreviewCommandByteCount)
+                preview_bytes |=
+                    (U64(current_command_byte) << (captured_command_bytes * 8));
+
+              ++captured_command_bytes;
+
+              if (command_byte_index == 0) {
+                command_opcode = current_command_byte;
+              } else if (command_byte_index == 1) {
+                command_byte1 = current_command_byte;
+              } else if (command_byte_index == 2) {
+                command_byte2 = current_command_byte;
+              } else if (command_byte_index == 3) {
+                command_byte3 = current_command_byte;
+              }
+
+              expected_command_bytes = EspiCommand::GetExpectedByteCount(
+                  command_opcode, command_byte1, command_byte2, command_byte3);
+
+              if (command_byte_index > 0 &&
+                  (command_opcode == 0x21 || command_opcode == 0x22)) {
+                if (command_byte_index == 1)
+                  configuration_address = U16(current_command_byte) << 8;
+                else if (command_byte_index == 2)
+                  configuration_address |= current_command_byte;
+                else if (command_opcode == 0x22 && command_byte_index >= 3 &&
+                         command_byte_index <= 6)
+                  configuration_value |= U32(current_command_byte)
+                                         << ((command_byte_index - 3) * 8);
+              } else if (command_byte_index > 0 &&
+                         EspiCommand::IsShortIoOpcode(command_opcode)) {
+                if (command_byte_index == 1)
+                  transaction_details.short_io_address =
+                      U16(current_command_byte) << 8;
+                else if (command_byte_index == 2)
+                  transaction_details.short_io_address |= current_command_byte;
+                else if (EspiCommand::IsShortIoWrite(command_opcode) &&
+                         command_byte_index >= 3 &&
+                         command_byte_index <
+                             3 + EspiCommand::GetShortAccessByteCount(
+                                     command_opcode)) {
+                  transaction_details.short_io_data |=
+                      U32(current_command_byte)
+                      << ((command_byte_index - 3) * 8);
+                }
+              } else if (command_opcode == 0x04 && command_byte_index == 1) {
+                transaction_details.virtual_wire_group_count =
+                    (current_command_byte & 0x3f) + 1;
+              } else if (command_opcode == 0x04 && command_byte_index >= 2 &&
+                         command_byte_index <
+                             2 + (2 * transaction_details
+                                          .virtual_wire_group_count)) {
+                if ((command_byte_index & 1) == 0) {
+                  pending_virtual_wire_index = current_command_byte;
+                } else {
+                  EspiAnalyzerResults::VirtualWireGroup group;
+                  group.index = pending_virtual_wire_index;
+                  group.data = current_command_byte;
+                  transaction_details.virtual_wire_groups.push_back(group);
+                }
+              }
+
+              current_command_bit_count = 0;
+              current_command_byte = 0;
+
+              if (captured_command_bytes >= expected_command_bytes)
+                phase = Phase::Turnaround;
+            }
+          } else if (phase == Phase::Turnaround) {
+            ++turnaround_edge_count;
+            if (turnaround_edge_count >= 2)
+              phase = Phase::ResponseWaitState;
+          } else {
+            current_response_byte =
+                U8((current_response_byte << bits_per_clock) |
+                   SampleSymbol(true, stable_sample));
+
+            current_response_bit_count += bits_per_clock;
+            if (current_response_bit_count == 8) {
+              if (phase == Phase::ResponseWaitState) {
+                if (current_response_byte == 0x0f) {
+                  ++observed_wait_state_bytes;
+                } else {
+                  first_response_byte = current_response_byte;
+                  RecordResponseByte(current_response_byte);
+                  if (captured_response_bytes < kPreviewResponseByteCount)
+                    preview_bytes |= (U64(current_response_byte)
+                                      << ((kPreviewCommandByteCount +
+                                           captured_response_bytes) *
+                                          8));
+
+                  ++captured_response_bytes;
+                  phase = Phase::ResponseData;
+                }
+              } else {
+                const U32 response_byte_index = captured_response_bytes;
+                if (command_opcode == 0x21 && response_byte_index >= 1 &&
+                    response_byte_index <= 4) {
+                  configuration_value |= U32(current_response_byte)
+                                         << ((response_byte_index - 1) * 8);
+                } else if (EspiCommand::IsShortIoOpcode(command_opcode) &&
+                           !EspiCommand::IsShortIoWrite(command_opcode) &&
+                           response_byte_index >= 1 &&
+                           response_byte_index <=
+                               EspiCommand::GetShortAccessByteCount(
+                                   command_opcode)) {
+                  transaction_details.short_io_data |=
+                      U32(current_response_byte)
+                      << ((response_byte_index - 1) * 8);
+                } else if ((command_opcode == 0x05 ||
+                            (command_opcode == 0x25 &&
+                             ((first_response_byte >> 6) & 0x03) == 0x02)) &&
+                           response_byte_index == 1) {
+                  transaction_details.virtual_wire_group_count =
+                      (current_response_byte & 0x3f) + 1;
+                } else if ((command_opcode == 0x05 ||
+                            (command_opcode == 0x25 &&
+                             ((first_response_byte >> 6) & 0x03) == 0x02)) &&
+                           response_byte_index >= 2 &&
+                           response_byte_index <
+                               2 + (2 * transaction_details
+                                            .virtual_wire_group_count)) {
+                  if ((response_byte_index & 1) == 0) {
+                    pending_virtual_wire_index = current_response_byte;
+                  } else {
+                    EspiAnalyzerResults::VirtualWireGroup group;
+                    group.index = pending_virtual_wire_index;
+                    group.data = current_response_byte;
+                    transaction_details.virtual_wire_groups.push_back(group);
+                  }
+                }
+
+                if (captured_response_bytes < kPreviewResponseByteCount)
+                  preview_bytes |= (U64(current_response_byte)
+                                    << ((kPreviewCommandByteCount +
+                                         captured_response_bytes) *
+                                        8));
+
+                RecordResponseByte(current_response_byte);
+                ++captured_response_bytes;
+              }
+
+              current_response_bit_count = 0;
+              current_response_byte = 0;
+            }
+          }
+        }
+
+        continue;
+      }
+
+      chip_select.AdvanceToNextEdge();
+      mClock->AdvanceToAbsPosition(chip_select.GetSampleNumber());
+    }
+
+    AdvanceDedicatedAlert(chip_select.GetSampleNumber());
+
+    if ((clock_edge_count == 0) && (captured_command_bytes == 0) &&
+        (captured_response_bytes == 0) && (current_command_bit_count == 0) &&
+        (current_response_bit_count == 0) && (observed_wait_state_bytes == 0)) {
+      continue;
+    }
+
+    const U64 transaction_end = chip_select.GetSampleNumber();
+    have_last_cs_deassertion = true;
+    last_cs_deassertion = transaction_end;
+    EspiIoMode next_io_mode = active_io_mode;
+    const bool complete_in_band_reset = command_opcode == 0xff &&
+                                        reset_sequence_is_high &&
+                                        reset_high_clock_count == 16;
+    if (complete_in_band_reset) {
+      next_io_mode = EspiIoMode::Single;
+    } else if (command_opcode == 0x22 && configuration_address == 0x0008 &&
+               IsAcceptResponse(first_response_byte)) {
+      const U8 requested_mode = U8((configuration_value >> 26) & 0x03);
+      const bool required_channels_available =
+          requested_mode != U8(EspiIoMode::Quad) ||
+          (mIo2 != nullptr && mIo3 != nullptr);
+      if (requested_mode <= U8(EspiIoMode::Quad) && required_channels_available)
+        next_io_mode = EspiIoMode(requested_mode);
+    }
+
+    const bool complete_configuration =
+        (command_opcode == 0x21 && captured_command_bytes >= 3 &&
+         captured_response_bytes >= 5) ||
+        (command_opcode == 0x22 && captured_command_bytes >= 7 &&
+         captured_response_bytes >= 1);
+    if (complete_configuration && IsAcceptResponse(first_response_byte)) {
+      transaction_details.has_configuration = true;
+      transaction_details.configuration_is_write = command_opcode == 0x22;
+      transaction_details.configuration_address = configuration_address;
+      transaction_details.configuration_value = configuration_value;
+    }
+
+    // Every driven GET_STATUS response ends with Status[7:0], Status[15:8],
+    // and CRC. Keeping a rolling response tail also covers appended channel
+    // data.
+    if (command_opcode == 0x25 && captured_response_bytes >= 4 &&
+        first_response_byte != 0xff) {
+      transaction_details.has_status = true;
+      transaction_details.status =
+          U16(response_tail0) | (U16(response_tail1) << 8);
+      transaction_details.response_modifier =
+          U8((first_response_byte >> 6) & 0x03);
+    }
+
+    if (EspiCommand::IsShortIoOpcode(command_opcode) &&
+        captured_command_bytes >= expected_command_bytes) {
+      const U32 access_size =
+          EspiCommand::GetShortAccessByteCount(command_opcode);
+      const bool is_write = EspiCommand::IsShortIoWrite(command_opcode);
+      const bool response_has_data =
+          !is_write && IsAcceptResponse(first_response_byte);
+      const U32 minimum_response_bytes =
+          4 + (response_has_data ? access_size : 0);
+      transaction_details.has_short_io = true;
+      transaction_details.short_io_is_write = is_write;
+      transaction_details.short_io_has_data =
+          is_write || (response_has_data &&
+                       captured_response_bytes >= minimum_response_bytes);
+      transaction_details.short_io_has_status =
+          captured_response_bytes >= minimum_response_bytes;
+      transaction_details.short_io_size = U8(access_size);
+      if (captured_response_bytes >= minimum_response_bytes)
+        transaction_details.short_io_status =
+            U16(response_tail0) | (U16(response_tail1) << 8);
+    }
+
+    const bool ignore_transaction =
+        mSettings.mIgnorePutIoReadShort &&
+        EspiCommand::IsShortIoOpcode(command_opcode) &&
+        !EspiCommand::IsShortIoWrite(command_opcode);
+    if (!ignore_transaction) {
+      Frame frame;
+      frame.mType = kTransactionFrame;
+      const bool response_expected = command_opcode != 0xff;
+      const bool truncated_transaction =
+          current_command_bit_count != 0 ||
+          captured_command_bytes < expected_command_bytes ||
+          (response_expected &&
+           (current_response_bit_count != 0 || captured_response_bytes < 4));
+      frame.mFlags = truncated_transaction ? DISPLAY_AS_ERROR_FLAG : 0;
+      frame.mData1 = preview_bytes;
+      // mData2: mode[63:62], next mode[61:60], rsp partial[59:57],
+      // cmd partial[56:54], wait states[53:48],
+      // response bytes[47:40], command bytes[39:32], clock edges[31:0].
+      frame.mData2 = (U64(U8(active_io_mode) & 0x03) << 62) |
+                     (U64(U8(next_io_mode) & 0x03) << 60) |
+                     (U64(current_response_bit_count & 0x07) << 57) |
+                     (U64(current_command_bit_count & 0x07) << 54) |
+                     (U64(observed_wait_state_bytes & 0x3f) << 48) |
+                     (U64(captured_response_bytes & 0xff) << 40) |
+                     (U64(captured_command_bytes & 0xff) << 32) |
+                     U64(clock_edge_count & 0xffffffffULL);
+      frame.mStartingSampleInclusive = transaction_start;
+      frame.mEndingSampleInclusive = transaction_end;
+      mResults->AddTransactionDetails(transaction_details);
+      mResults->AddFrame(frame);
+      mResults->CommitResults();
+      mResults->CommitPacketAndStartNewPacket();
+    }
+    ReportProgress(transaction_end);
+    have_seen_transaction = !complete_in_band_reset;
+    active_io_mode = next_io_mode;
+    alert_armed = alert->GetBitState() == BIT_HIGH;
+  }
 }
 
-void EspiAnalyzer::WorkerThread()
-{
-	mClock = GetAnalyzerChannelData( mSettings.mClockChannel );
-	mChipSelect = GetAnalyzerChannelData( mSettings.mChipSelectChannel );
-	mReset = mSettings.mResetChannel == UNDEFINED_CHANNEL ? nullptr : GetAnalyzerChannelData( mSettings.mResetChannel );
-	mIo0 = GetAnalyzerChannelData( mSettings.mIo0Channel );
-	mIo1 = GetAnalyzerChannelData( mSettings.mIo1Channel );
-	mIo2 = mSettings.mIo2Channel == UNDEFINED_CHANNEL ? nullptr : GetAnalyzerChannelData( mSettings.mIo2Channel );
-	mIo3 = mSettings.mIo3Channel == UNDEFINED_CHANNEL ? nullptr : GetAnalyzerChannelData( mSettings.mIo3Channel );
-	const U64 filter_samples = ( U64( mSettings.mCsGlitchFilterNs ) * GetSampleRate() + 999999999ULL ) / 1000000000ULL;
-	EspiFilteredChannel<AnalyzerChannelData> chip_select( mChipSelect, filter_samples );
-	const bool dedicated_alert = mSettings.mAlertChannel != UNDEFINED_CHANNEL;
-	AnalyzerChannelData* alert = dedicated_alert ? GetAnalyzerChannelData( mSettings.mAlertChannel ) : mIo1;
-	EspiIoMode active_io_mode = EspiIoMode( mSettings.mInitialIoMode );
-	bool alert_armed = alert->GetBitState() == BIT_HIGH;
-	bool alert_asserted = false;
-	bool initial_idle_observation = chip_select.GetBitState() == BIT_HIGH;
-	bool have_seen_transaction = false;
-	bool have_last_cs_deassertion = false;
-	U64 last_cs_deassertion = 0;
-	U64 observed_clock_period = 0;
-	auto ApplyExternalReset = [&]() {
-		active_io_mode = EspiIoMode::Single;
-		have_seen_transaction = false;
-		if( !dedicated_alert )
-		{
-			alert_asserted = false;
-			alert_armed = false;
-		}
-	};
-	U64 alert_start = 0;
-	auto EmitAlertFrame = [&]( U64 start, U64 end ) {
-		if( mSettings.mIgnoreAlert || ( !dedicated_alert && !have_seen_transaction ) )
-			return;
+bool EspiAnalyzer::NeedsRerun() { return false; }
 
-		Frame frame;
-		frame.mType = kAlertFrame;
-		frame.mFlags = 0;
-		frame.mData1 = 0;
-		frame.mData2 = 0;
-		frame.mStartingSampleInclusive = start;
-		frame.mEndingSampleInclusive = end;
-		mResults->AddTransactionDetails( EspiAnalyzerResults::TransactionDetails() );
-		mResults->AddFrame( frame );
-		mResults->CommitResults();
-		mResults->CommitPacketAndStartNewPacket();
-		ReportProgress( end );
-	};
-	if( mReset != nullptr )
-	{
-		mReset->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
-		if( mReset->GetBitState() == BIT_LOW )
-			ApplyExternalReset();
-	}
+U32 EspiAnalyzer::GenerateSimulationData(
+    U64 minimum_sample_index, U32 device_sample_rate,
+    SimulationChannelDescriptor **simulation_channels) {
+  if (mSimulationInitilized == false) {
+    mSimulationDataGenerator.Initialize(GetSimulationSampleRate(), &mSettings);
+    mSimulationInitilized = true;
+  }
 
-	// Dedicated ALERT# remains meaningful while CS# is active. Consume every
-	// edge up to the transaction boundary, including pulses wholly inside it.
-	auto AdvanceDedicatedAlert = [&]( U64 end ) {
-		if( !dedicated_alert )
-			return;
-		EspiAdvanceAlert( alert, end, alert_asserted, alert_start, EmitAlertFrame );
-		alert_armed = alert->GetBitState() == BIT_HIGH;
-	};
-
-	for( ; ; )
-	{
-		AdvanceDedicatedAlert( chip_select.GetSampleNumber() );
-		if( chip_select.GetBitState() == BIT_HIGH )
-		{
-			alert->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
-			if( mReset != nullptr )
-			{
-				mReset->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
-				if( mReset->GetBitState() == BIT_LOW )
-					ApplyExternalReset();
-			}
-			if( alert->GetBitState() == BIT_HIGH )
-			{
-				alert_armed = true;
-			}
-			else if( initial_idle_observation && !alert_asserted )
-			{
-				// A capture may begin after ALERT# was asserted. During normal
-				// decoding, require the high-to-low transition while CS# is high.
-				alert_asserted = true;
-				alert_armed = false;
-				alert_start = chip_select.GetSampleNumber();
-			}
-			initial_idle_observation = false;
-
-			while( chip_select.GetBitState() == BIT_HIGH )
-			{
-				// CS# is the framing signal, so establish its next edge before
-				// considering edges on independently chunked channels. Treating
-				// "not in the current data block" as no CS# edge can make
-				// AdvanceToAbsPosition() skip a complete deassert/assert pulse.
-				const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
-				const bool alert_has_edge =
-					alert->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
-				const bool reset_has_edge = mReset != nullptr &&
-					mReset->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
-
-				const U64 next_alert_edge = alert_has_edge ? alert->GetSampleOfNextEdge() :
-					std::numeric_limits<U64>::max();
-				const U64 next_reset_edge = reset_has_edge ? mReset->GetSampleOfNextEdge() :
-					std::numeric_limits<U64>::max();
-				if( next_alert_edge < next_cs_edge || ( dedicated_alert && next_alert_edge == next_cs_edge ) )
-				{
-					if( next_alert_edge >= next_reset_edge )
-					{
-						mReset->AdvanceToNextEdge();
-						chip_select.AdvanceToAbsPosition( mReset->GetSampleNumber() );
-						alert->AdvanceToAbsPosition( mReset->GetSampleNumber() );
-						if( mReset->GetBitState() == BIT_LOW )
-							ApplyExternalReset();
-						else
-							alert_armed = alert->GetBitState() == BIT_HIGH;
-						continue;
-					}
-
-					alert->AdvanceToNextEdge();
-					chip_select.AdvanceToAbsPosition( alert->GetSampleNumber() );
-					if( alert->GetBitState() == BIT_LOW && alert_armed )
-					{
-						alert_asserted = true;
-						alert_armed = false;
-						alert_start = alert->GetSampleNumber();
-					}
-					else if( alert->GetBitState() == BIT_HIGH )
-					{
-						if( alert_asserted )
-							EmitAlertFrame( alert_start, alert->GetSampleNumber() );
-						alert_asserted = false;
-						alert_armed = true;
-					}
-					continue;
-				}
-
-				if( next_reset_edge < next_cs_edge )
-				{
-					mReset->AdvanceToNextEdge();
-					chip_select.AdvanceToAbsPosition( mReset->GetSampleNumber() );
-					alert->AdvanceToAbsPosition( mReset->GetSampleNumber() );
-					if( mReset->GetBitState() == BIT_LOW )
-						ApplyExternalReset();
-					else
-						alert_armed = alert->GetBitState() == BIT_HIGH;
-					continue;
-				}
-
-				chip_select.AdvanceToNextEdge();
-				alert->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
-				if( mReset != nullptr )
-					mReset->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
-				if( !dedicated_alert )
-				{
-					if( alert_asserted )
-						EmitAlertFrame( alert_start, chip_select.GetSampleNumber() );
-					alert_asserted = false;
-					alert_armed = false;
-				}
-			}
-		}
-
-		if( chip_select.GetBitState() != BIT_LOW )
-			continue;
-
-		const U64 transaction_start = chip_select.GetSampleNumber();
-		mClock->AdvanceToAbsPosition( transaction_start );
-
-		// CS# must be asserted while CLK is low and must remain deasserted for
-		// tSHSL, whose minimum is one clock period. Discard the complete invalid
-		// assertion so residual traffic from an aborted transaction cannot be
-		// interpreted as new commands.
-		const U64 cs_high_time = have_last_cs_deassertion ?
-			transaction_start - last_cs_deassertion : 0;
-		const bool violates_deassertion_time = have_last_cs_deassertion &&
-			observed_clock_period != 0 && cs_high_time < observed_clock_period;
-		if( mClock->GetBitState() != BIT_LOW || violates_deassertion_time )
-		{
-			const U64 invalid_start = transaction_start;
-
-			// Drain the invalid assertion using both active channels. Waiting
-			// for the framing edge first prevents an independently chunked clock
-			// channel from advancing CS# across a short deassert/assert pulse.
-			while( chip_select.GetBitState() == BIT_LOW )
-			{
-				const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
-				const bool clock_has_edge =
-					mClock->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
-
-				const U64 next_clock_edge = clock_has_edge ? mClock->GetSampleOfNextEdge() :
-					std::numeric_limits<U64>::max();
-				if( next_clock_edge < next_cs_edge )
-				{
-					mClock->AdvanceToNextEdge();
-					chip_select.AdvanceToAbsPosition( mClock->GetSampleNumber() );
-					continue;
-				}
-
-				chip_select.AdvanceToNextEdge();
-				mClock->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
-			}
-
-			const U64 invalid_end = chip_select.GetSampleNumber();
-			AdvanceDedicatedAlert( invalid_end );
-
-			Frame frame;
-			frame.mType = kInvalidChipSelectFrame;
-			frame.mFlags = DISPLAY_AS_ERROR_FLAG;
-			frame.mData1 = 0;
-			frame.mData2 = 0;
-			frame.mStartingSampleInclusive = invalid_start;
-			frame.mEndingSampleInclusive = invalid_end;
-			mResults->AddTransactionDetails( EspiAnalyzerResults::TransactionDetails() );
-			mResults->AddFrame( frame );
-			mResults->CommitResults();
-			mResults->CommitPacketAndStartNewPacket();
-			ReportProgress( invalid_end );
-			have_last_cs_deassertion = true;
-			last_cs_deassertion = invalid_end;
-			continue;
-		}
-
-		mIo0->AdvanceToAbsPosition( transaction_start );
-		mIo1->AdvanceToAbsPosition( transaction_start );
-		if( mReset != nullptr )
-		{
-			mReset->AdvanceToAbsPosition( transaction_start );
-			if( mReset->GetBitState() == BIT_LOW )
-				ApplyExternalReset();
-		}
-		if( mIo2 != nullptr )
-			mIo2->AdvanceToAbsPosition( transaction_start );
-		if( mIo3 != nullptr )
-			mIo3->AdvanceToAbsPosition( transaction_start );
-
-		U64 clock_edge_count = 0;
-		U64 preview_bytes = 0;
-		U8 current_command_byte = 0;
-		U8 current_response_byte = 0;
-		U32 current_command_bit_count = 0;
-		U32 current_response_bit_count = 0;
-		U32 captured_command_bytes = 0;
-		U32 captured_response_bytes = 0;
-		U32 observed_wait_state_bytes = 0;
-		U32 expected_command_bytes = kPreviewCommandByteCount;
-		U32 turnaround_edge_count = 0;
-		U32 reset_high_clock_count = 0;
-		U64 last_rising_edge = 0;
-		bool reset_sequence_is_high = mIo2 != nullptr && mIo3 != nullptr;
-		U8 command_opcode = 0;
-		U8 command_byte1 = 0;
-		U8 command_byte2 = 0;
-		U8 command_byte3 = 0;
-		U16 configuration_address = 0;
-		U32 configuration_value = 0;
-		U8 first_response_byte = 0xff;
-		U8 response_tail0 = 0;
-		U8 response_tail1 = 0;
-		U8 response_tail2 = 0;
-		U8 pending_virtual_wire_index = 0;
-		EspiAnalyzerResults::TransactionDetails transaction_details;
-		const U32 bits_per_clock = active_io_mode == EspiIoMode::Quad ? 4 : ( active_io_mode == EspiIoMode::Dual ? 2 : 1 );
-
-		enum class Phase
-		{
-			Command,
-			Turnaround,
-			ResponseWaitState,
-			ResponseData
-		};
-
-		Phase phase = Phase::Command;
-		auto RecordResponseByte = [&]( U8 value ) {
-			response_tail0 = response_tail1;
-			response_tail1 = response_tail2;
-			response_tail2 = value;
-		};
-		auto SampleSymbol = [&]( bool response_phase, U64 sample ) -> U8 {
-			if( active_io_mode == EspiIoMode::Single )
-			{
-				AnalyzerChannelData* data = response_phase ? mIo1 : mIo0;
-				data->AdvanceToAbsPosition( sample );
-				return data->GetBitState() == BIT_HIGH ? 1 : 0;
-			}
-
-			mIo0->AdvanceToAbsPosition( sample );
-			mIo1->AdvanceToAbsPosition( sample );
-			U8 symbol = 0;
-			if( mIo0->GetBitState() == BIT_HIGH )
-				symbol |= 0x1;
-			if( mIo1->GetBitState() == BIT_HIGH )
-				symbol |= 0x2;
-
-			if( active_io_mode == EspiIoMode::Quad )
-			{
-				mIo2->AdvanceToAbsPosition( sample );
-				mIo3->AdvanceToAbsPosition( sample );
-				if( mIo2->GetBitState() == BIT_HIGH )
-					symbol |= 0x4;
-				if( mIo3->GetBitState() == BIT_HIGH )
-					symbol |= 0x8;
-			}
-
-			return symbol;
-		};
-
-		while( chip_select.GetBitState() == BIT_LOW )
-		{
-			// Resolve the transaction boundary first. CS# and CLK use
-			// independent SDK data blocks, so CLK availability cannot prove
-			// that a CS# edge does not occur earlier.
-			const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
-			const bool clock_has_edge =
-				mClock->WouldAdvancingToAbsPositionCauseTransition( next_cs_edge );
-
-			const U64 next_clock_edge = clock_has_edge ? mClock->GetSampleOfNextEdge() :
-				std::numeric_limits<U64>::max();
-
-			if( next_clock_edge < next_cs_edge )
-			{
-				mClock->AdvanceToNextEdge();
-				chip_select.AdvanceToAbsPosition( mClock->GetSampleNumber() );
-
-				if( chip_select.GetBitState() == BIT_LOW )
-				{
-					++clock_edge_count;
-
-					if( mClock->GetBitState() != BIT_HIGH )
-						continue;
-
-					// Sample inside the stable high phase rather than exactly at the
-					// rising-edge timestamp. Logic 2 can assign simultaneous clock and
-					// data transitions to the same sample, making their ordering
-					// ambiguous at the edge even though the captured high phase is
-					// unambiguous.
-					const U64 rising_edge_sample = mClock->GetSampleNumber();
-					if( last_rising_edge != 0 )
-						observed_clock_period = rising_edge_sample - last_rising_edge;
-					last_rising_edge = rising_edge_sample;
-					const U64 following_edge_sample = mClock->GetSampleOfNextEdge();
-					const U64 stable_phase_end = following_edge_sample < next_cs_edge ?
-						following_edge_sample : next_cs_edge;
-					// Sample at the center of the clock-high phase. Sampling at
-					// 75% was late enough for some captured data lines to begin
-					// changing before CLK fell, corrupting Quad-mode nibbles
-					// (for example, real 0x03F8 accesses appeared as 0x03FC).
-					const U64 stable_sample = rising_edge_sample +
-						( ( stable_phase_end - rising_edge_sample ) / 2 );
-
-					if( reset_sequence_is_high )
-					{
-						mIo0->AdvanceToAbsPosition( stable_sample );
-						mIo1->AdvanceToAbsPosition( stable_sample );
-						mIo2->AdvanceToAbsPosition( stable_sample );
-						mIo3->AdvanceToAbsPosition( stable_sample );
-						reset_sequence_is_high = mIo0->GetBitState() == BIT_HIGH &&
-							mIo1->GetBitState() == BIT_HIGH && mIo2->GetBitState() == BIT_HIGH &&
-							mIo3->GetBitState() == BIT_HIGH;
-						if( reset_sequence_is_high )
-							++reset_high_clock_count;
-					}
-
-					if( phase == Phase::Command )
-					{
-						current_command_byte = U8( ( current_command_byte << bits_per_clock ) |
-							SampleSymbol( false, stable_sample ) );
-
-						current_command_bit_count += bits_per_clock;
-						if( current_command_bit_count == 8 )
-						{
-							const U32 command_byte_index = captured_command_bytes;
-							if( captured_command_bytes < kPreviewCommandByteCount )
-								preview_bytes |= ( U64( current_command_byte ) << ( captured_command_bytes * 8 ) );
-
-							++captured_command_bytes;
-
-							if( command_byte_index == 0 )
-							{
-								command_opcode = current_command_byte;
-							}
-							else if( command_byte_index == 1 )
-							{
-								command_byte1 = current_command_byte;
-							}
-							else if( command_byte_index == 2 )
-							{
-								command_byte2 = current_command_byte;
-							}
-							else if( command_byte_index == 3 )
-							{
-								command_byte3 = current_command_byte;
-							}
-
-							expected_command_bytes = EspiCommand::GetExpectedByteCount(
-								command_opcode, command_byte1, command_byte2, command_byte3 );
-
-							if( command_byte_index > 0 && ( command_opcode == 0x21 || command_opcode == 0x22 ) )
-							{
-								if( command_byte_index == 1 )
-									configuration_address = U16( current_command_byte ) << 8;
-								else if( command_byte_index == 2 )
-									configuration_address |= current_command_byte;
-								else if( command_opcode == 0x22 && command_byte_index >= 3 && command_byte_index <= 6 )
-									configuration_value |= U32( current_command_byte ) << ( ( command_byte_index - 3 ) * 8 );
-							}
-							else if( command_byte_index > 0 && EspiCommand::IsShortIoOpcode( command_opcode ) )
-							{
-								if( command_byte_index == 1 )
-									transaction_details.short_io_address = U16( current_command_byte ) << 8;
-								else if( command_byte_index == 2 )
-									transaction_details.short_io_address |= current_command_byte;
-								else if( EspiCommand::IsShortIoWrite( command_opcode ) && command_byte_index >= 3 &&
-									command_byte_index < 3 + EspiCommand::GetShortAccessByteCount( command_opcode ) )
-								{
-									transaction_details.short_io_data |= U32( current_command_byte ) <<
-										( ( command_byte_index - 3 ) * 8 );
-								}
-							}
-							else if( command_opcode == 0x04 && command_byte_index == 1 )
-							{
-								transaction_details.virtual_wire_group_count = ( current_command_byte & 0x3f ) + 1;
-							}
-							else if( command_opcode == 0x04 && command_byte_index >= 2 &&
-								command_byte_index < 2 + ( 2 * transaction_details.virtual_wire_group_count ) )
-							{
-								if( ( command_byte_index & 1 ) == 0 )
-								{
-									pending_virtual_wire_index = current_command_byte;
-								}
-								else
-								{
-									EspiAnalyzerResults::VirtualWireGroup group;
-									group.index = pending_virtual_wire_index;
-									group.data = current_command_byte;
-									transaction_details.virtual_wire_groups.push_back( group );
-								}
-							}
-
-							current_command_bit_count = 0;
-							current_command_byte = 0;
-
-							if( captured_command_bytes >= expected_command_bytes )
-								phase = Phase::Turnaround;
-						}
-					}
-					else if( phase == Phase::Turnaround )
-					{
-						++turnaround_edge_count;
-						if( turnaround_edge_count >= 2 )
-							phase = Phase::ResponseWaitState;
-					}
-					else
-					{
-						current_response_byte = U8( ( current_response_byte << bits_per_clock ) |
-							SampleSymbol( true, stable_sample ) );
-
-						current_response_bit_count += bits_per_clock;
-						if( current_response_bit_count == 8 )
-						{
-							if( phase == Phase::ResponseWaitState )
-							{
-								if( current_response_byte == 0x0f )
-								{
-									++observed_wait_state_bytes;
-								}
-								else
-								{
-									first_response_byte = current_response_byte;
-									RecordResponseByte( current_response_byte );
-									if( captured_response_bytes < kPreviewResponseByteCount )
-										preview_bytes |= ( U64( current_response_byte ) << ( ( kPreviewCommandByteCount + captured_response_bytes ) * 8 ) );
-
-									++captured_response_bytes;
-									phase = Phase::ResponseData;
-								}
-							}
-							else
-							{
-								const U32 response_byte_index = captured_response_bytes;
-								if( command_opcode == 0x21 && response_byte_index >= 1 && response_byte_index <= 4 )
-								{
-									configuration_value |= U32( current_response_byte ) << ( ( response_byte_index - 1 ) * 8 );
-								}
-								else if( EspiCommand::IsShortIoOpcode( command_opcode ) &&
-									!EspiCommand::IsShortIoWrite( command_opcode ) && response_byte_index >= 1 &&
-									response_byte_index <= EspiCommand::GetShortAccessByteCount( command_opcode ) )
-								{
-									transaction_details.short_io_data |= U32( current_response_byte ) <<
-										( ( response_byte_index - 1 ) * 8 );
-								}
-								else if( ( command_opcode == 0x05 ||
-									( command_opcode == 0x25 && ( ( first_response_byte >> 6 ) & 0x03 ) == 0x02 ) ) &&
-									response_byte_index == 1 )
-								{
-									transaction_details.virtual_wire_group_count = ( current_response_byte & 0x3f ) + 1;
-								}
-								else if( ( command_opcode == 0x05 ||
-									( command_opcode == 0x25 && ( ( first_response_byte >> 6 ) & 0x03 ) == 0x02 ) ) &&
-									response_byte_index >= 2 &&
-									response_byte_index < 2 + ( 2 * transaction_details.virtual_wire_group_count ) )
-								{
-									if( ( response_byte_index & 1 ) == 0 )
-									{
-										pending_virtual_wire_index = current_response_byte;
-									}
-									else
-									{
-										EspiAnalyzerResults::VirtualWireGroup group;
-										group.index = pending_virtual_wire_index;
-										group.data = current_response_byte;
-										transaction_details.virtual_wire_groups.push_back( group );
-									}
-								}
-
-								if( captured_response_bytes < kPreviewResponseByteCount )
-									preview_bytes |= ( U64( current_response_byte ) << ( ( kPreviewCommandByteCount + captured_response_bytes ) * 8 ) );
-
-								RecordResponseByte( current_response_byte );
-								++captured_response_bytes;
-							}
-
-							current_response_bit_count = 0;
-							current_response_byte = 0;
-						}
-					}
-				}
-
-				continue;
-			}
-
-			chip_select.AdvanceToNextEdge();
-			mClock->AdvanceToAbsPosition( chip_select.GetSampleNumber() );
-		}
-
-		AdvanceDedicatedAlert( chip_select.GetSampleNumber() );
-
-		if( ( clock_edge_count == 0 ) && ( captured_command_bytes == 0 ) && ( captured_response_bytes == 0 ) &&
-			( current_command_bit_count == 0 ) && ( current_response_bit_count == 0 ) && ( observed_wait_state_bytes == 0 ) )
-		{
-			continue;
-		}
-
-		const U64 transaction_end = chip_select.GetSampleNumber();
-		have_last_cs_deassertion = true;
-		last_cs_deassertion = transaction_end;
-		EspiIoMode next_io_mode = active_io_mode;
-		const bool complete_in_band_reset = command_opcode == 0xff && reset_sequence_is_high &&
-			reset_high_clock_count == 16;
-		if( complete_in_band_reset )
-		{
-			next_io_mode = EspiIoMode::Single;
-		}
-		else if( command_opcode == 0x22 && configuration_address == 0x0008 && IsAcceptResponse( first_response_byte ) )
-		{
-			const U8 requested_mode = U8( ( configuration_value >> 26 ) & 0x03 );
-			const bool required_channels_available = requested_mode != U8( EspiIoMode::Quad ) ||
-				( mIo2 != nullptr && mIo3 != nullptr );
-			if( requested_mode <= U8( EspiIoMode::Quad ) && required_channels_available )
-				next_io_mode = EspiIoMode( requested_mode );
-		}
-
-		const bool complete_configuration =
-			( command_opcode == 0x21 && captured_command_bytes >= 3 && captured_response_bytes >= 5 ) ||
-			( command_opcode == 0x22 && captured_command_bytes >= 7 && captured_response_bytes >= 1 );
-		if( complete_configuration && IsAcceptResponse( first_response_byte ) )
-		{
-			transaction_details.has_configuration = true;
-			transaction_details.configuration_is_write = command_opcode == 0x22;
-			transaction_details.configuration_address = configuration_address;
-			transaction_details.configuration_value = configuration_value;
-		}
-
-		// Every driven GET_STATUS response ends with Status[7:0], Status[15:8],
-		// and CRC. Keeping a rolling response tail also covers appended channel data.
-		if( command_opcode == 0x25 && captured_response_bytes >= 4 && first_response_byte != 0xff )
-		{
-			transaction_details.has_status = true;
-			transaction_details.status = U16( response_tail0 ) | ( U16( response_tail1 ) << 8 );
-			transaction_details.response_modifier = U8( ( first_response_byte >> 6 ) & 0x03 );
-		}
-
-		if( EspiCommand::IsShortIoOpcode( command_opcode ) && captured_command_bytes >= expected_command_bytes )
-		{
-			const U32 access_size = EspiCommand::GetShortAccessByteCount( command_opcode );
-			const bool is_write = EspiCommand::IsShortIoWrite( command_opcode );
-			const bool response_has_data = !is_write && IsAcceptResponse( first_response_byte );
-			const U32 minimum_response_bytes = 4 + ( response_has_data ? access_size : 0 );
-			transaction_details.has_short_io = true;
-			transaction_details.short_io_is_write = is_write;
-			transaction_details.short_io_has_data = is_write ||
-				( response_has_data && captured_response_bytes >= minimum_response_bytes );
-			transaction_details.short_io_has_status = captured_response_bytes >= minimum_response_bytes;
-			transaction_details.short_io_size = U8( access_size );
-			if( captured_response_bytes >= minimum_response_bytes )
-				transaction_details.short_io_status = U16( response_tail0 ) | ( U16( response_tail1 ) << 8 );
-		}
-
-		const bool ignore_transaction =
-			mSettings.mIgnorePutIoReadShort && EspiCommand::IsShortIoOpcode( command_opcode ) &&
-			!EspiCommand::IsShortIoWrite( command_opcode );
-		if( !ignore_transaction )
-		{
-			Frame frame;
-			frame.mType = kTransactionFrame;
-			const bool response_expected = command_opcode != 0xff;
-			const bool truncated_transaction =
-				current_command_bit_count != 0 || captured_command_bytes < expected_command_bytes ||
-				( response_expected && ( current_response_bit_count != 0 || captured_response_bytes < 4 ) );
-			frame.mFlags = truncated_transaction ? DISPLAY_AS_ERROR_FLAG : 0;
-			frame.mData1 = preview_bytes;
-			// mData2: mode[63:62], next mode[61:60], rsp partial[59:57],
-			// cmd partial[56:54], wait states[53:48],
-			// response bytes[47:40], command bytes[39:32], clock edges[31:0].
-			frame.mData2 =
-				( U64( U8( active_io_mode ) & 0x03 ) << 62 ) |
-				( U64( U8( next_io_mode ) & 0x03 ) << 60 ) |
-				( U64( current_response_bit_count & 0x07 ) << 57 ) |
-				( U64( current_command_bit_count & 0x07 ) << 54 ) |
-				( U64( observed_wait_state_bytes & 0x3f ) << 48 ) |
-				( U64( captured_response_bytes & 0xff ) << 40 ) |
-				( U64( captured_command_bytes & 0xff ) << 32 ) |
-				U64( clock_edge_count & 0xffffffffULL );
-			frame.mStartingSampleInclusive = transaction_start;
-			frame.mEndingSampleInclusive = transaction_end;
-			mResults->AddTransactionDetails( transaction_details );
-			mResults->AddFrame( frame );
-			mResults->CommitResults();
-			mResults->CommitPacketAndStartNewPacket();
-		}
-		ReportProgress( transaction_end );
-		have_seen_transaction = !complete_in_band_reset;
-		active_io_mode = next_io_mode;
-		alert_armed = alert->GetBitState() == BIT_HIGH;
-		}
-	}
-
-bool EspiAnalyzer::NeedsRerun()
-{
-	return false;
+  return mSimulationDataGenerator.GenerateSimulationData(
+      minimum_sample_index, device_sample_rate, simulation_channels);
 }
 
-U32 EspiAnalyzer::GenerateSimulationData( U64 minimum_sample_index, U32 device_sample_rate, SimulationChannelDescriptor** simulation_channels )
-{
-	if( mSimulationInitilized == false )
-	{
-		mSimulationDataGenerator.Initialize( GetSimulationSampleRate(), &mSettings );
-		mSimulationInitilized = true;
-	}
-
-	return mSimulationDataGenerator.GenerateSimulationData( minimum_sample_index, device_sample_rate, simulation_channels );
+U32 EspiAnalyzer::GetMinimumSampleRateHz() {
+  return 80000000; // Four samples per clock at the minimum 20 MHz eSPI
+                   // frequency.
 }
 
-U32 EspiAnalyzer::GetMinimumSampleRateHz()
-{
-	return 80000000; // Four samples per clock at the minimum 20 MHz eSPI frequency.
-}
+const char *EspiAnalyzer::GetAnalyzerName() const { return "Intel eSPI"; }
 
-const char* EspiAnalyzer::GetAnalyzerName() const
-{
-	return "Intel eSPI";
-}
+const char *GetAnalyzerName() { return "Intel eSPI"; }
 
-const char* GetAnalyzerName()
-{
-	return "Intel eSPI";
-}
+Analyzer *CreateAnalyzer() { return new EspiAnalyzer(); }
 
-Analyzer* CreateAnalyzer()
-{
-	return new EspiAnalyzer();
-}
-
-void DestroyAnalyzer( Analyzer* analyzer )
-{
-	delete analyzer;
-}
+void DestroyAnalyzer(Analyzer *analyzer) { delete analyzer; }
