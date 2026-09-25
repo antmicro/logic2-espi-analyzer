@@ -3,12 +3,12 @@
 Copyright (c) 2026 [Antmicro](https://www.antmicro.com)
 
 This repository contains a low-level analyzer for the Intel Enhanced Serial Peripheral Interface (eSPI), built with the [Saleae Analyzer SDK](https://github.com/saleae/AnalyzerSDK).
-It decodes eSPI commands and responses in [Logic 2](https://www.saleae.com/), including configuration registers, status, Virtual Wires and short I/O accesses.
+It decodes eSPI commands and responses in [Logic 2](https://www.saleae.com/), including configuration registers, statuses, Virtual Wires and short I/O accesses.
 
 ## Features
 
 * Single, Dual and Quad I/O decoding, with automatic mode changes after accepted `SET_CONFIGURATION` commands.
-* Command, turnaround, wait-state and response framing for Peripheral, Virtual Wire, Out-of-Band (OOB), Flash, configuration, status and short Peripheral commands.
+* Command, turnaround, wait-state and response framing for the Peripheral, Virtual Wire, Out-of-Band (OOB), Flash, configuration, status and short Peripheral commands.
 * Response identification: `ACCEPT`, `DEFER`, `NON_FATAL_ERROR`, `FATAL_ERROR` and `WAIT_STATE`.
 * Configuration register decoding for Device Identification, General, Peripheral, Virtual Wire, OOB and Flash registers.
 * `GET_STATUS` queue flags, pending-service commands, response modifiers and appended Virtual Wire data.
