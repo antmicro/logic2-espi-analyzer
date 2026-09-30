@@ -33,6 +33,9 @@ public:
     U16 short_io_address = 0;
     U32 short_io_data = 0;
     U16 short_io_status = 0;
+    U32 command_byte_count = 0;
+    U32 response_byte_count = 0;
+    U32 wait_state_byte_count = 0;
   };
 
   EspiAnalyzerResults(EspiAnalyzer *analyzer, EspiAnalyzerSettings *settings);

@@ -513,9 +513,9 @@ void EspiAnalyzerResults::GenerateBubbleText(U64 frame_index, Channel &channel,
     }
 
     const U32 edge_count = U32(frame.mData2 & 0xffffffffULL);
-    const U32 cmd_byte_count = U32((frame.mData2 >> 32) & 0xffULL);
-    const U32 rsp_byte_count = U32((frame.mData2 >> 40) & 0xffULL);
-    const U32 wait_state_count = U32((frame.mData2 >> 48) & 0x3fULL);
+    const U32 cmd_byte_count = transaction_details.command_byte_count;
+    const U32 rsp_byte_count = transaction_details.response_byte_count;
+    const U32 wait_state_count = transaction_details.wait_state_byte_count;
     const U32 cmd_partial_bits = U32((frame.mData2 >> 54) & 0x07ULL);
     const U32 rsp_partial_bits = U32((frame.mData2 >> 57) & 0x07ULL);
     const U32 next_io_mode = U32((frame.mData2 >> 60) & 0x03ULL);
@@ -784,9 +784,9 @@ void EspiAnalyzerResults::GenerateExportFile(const char *file,
     }
 
     const U32 edge_count = U32(frame.mData2 & 0xffffffffULL);
-    const U32 cmd_byte_count = U32((frame.mData2 >> 32) & 0xffULL);
-    const U32 rsp_byte_count = U32((frame.mData2 >> 40) & 0xffULL);
-    const U32 wait_state_count = U32((frame.mData2 >> 48) & 0x3fULL);
+    const U32 cmd_byte_count = transaction_details.command_byte_count;
+    const U32 rsp_byte_count = transaction_details.response_byte_count;
+    const U32 wait_state_count = transaction_details.wait_state_byte_count;
     const U32 cmd_partial_bits = U32((frame.mData2 >> 54) & 0x07ULL);
     const U32 rsp_partial_bits = U32((frame.mData2 >> 57) & 0x07ULL);
     const U32 next_io_mode = U32((frame.mData2 >> 60) & 0x03ULL);
@@ -916,9 +916,9 @@ void EspiAnalyzerResults::GenerateFrameTabularText(U64 frame_index,
     AddTabularText("Truncated transaction - unexpected CS# deassertion\n");
 
   const U32 edge_count = U32(frame.mData2 & 0xffffffffULL);
-  const U32 cmd_byte_count = U32((frame.mData2 >> 32) & 0xffULL);
-  const U32 rsp_byte_count = U32((frame.mData2 >> 40) & 0xffULL);
-  const U32 wait_state_count = U32((frame.mData2 >> 48) & 0x3fULL);
+  const U32 cmd_byte_count = transaction_details.command_byte_count;
+  const U32 rsp_byte_count = transaction_details.response_byte_count;
+  const U32 wait_state_count = transaction_details.wait_state_byte_count;
   const U32 cmd_partial_bits = U32((frame.mData2 >> 54) & 0x07ULL);
   const U32 rsp_partial_bits = U32((frame.mData2 >> 57) & 0x07ULL);
   const U32 next_io_mode = U32((frame.mData2 >> 60) & 0x03ULL);
