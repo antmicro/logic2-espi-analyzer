@@ -115,6 +115,7 @@ void EspiAnalyzer::WorkerThread() {
   };
 
   for (;;) {
+    CheckIfThreadShouldExit();
     AdvanceDedicatedAlert(chip_select.GetSampleNumber());
     if (chip_select.GetBitState() == BIT_HIGH) {
       alert->AdvanceToAbsPosition(chip_select.GetSampleNumber());
@@ -139,6 +140,7 @@ void EspiAnalyzer::WorkerThread() {
         // considering edges on independently chunked channels. Treating
         // "not in the current data block" as no CS# edge can make
         // AdvanceToAbsPosition() skip a complete deassert/assert pulse.
+        CheckIfThreadShouldExit();
         const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
         const bool alert_has_edge =
             alert->WouldAdvancingToAbsPositionCauseTransition(next_cs_edge);
@@ -226,6 +228,7 @@ void EspiAnalyzer::WorkerThread() {
       // for the framing edge first prevents an independently chunked clock
       // channel from advancing CS# across a short deassert/assert pulse.
       while (chip_select.GetBitState() == BIT_LOW) {
+        CheckIfThreadShouldExit();
         const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
         const bool clock_has_edge =
             mClock->WouldAdvancingToAbsPositionCauseTransition(next_cs_edge);
@@ -346,6 +349,7 @@ void EspiAnalyzer::WorkerThread() {
       // Resolve the transaction boundary first. CS# and CLK use
       // independent SDK data blocks, so CLK availability cannot prove
       // that a CS# edge does not occur earlier.
+      CheckIfThreadShouldExit();
       const U64 next_cs_edge = chip_select.GetSampleOfNextEdge();
       const bool clock_has_edge =
           mClock->WouldAdvancingToAbsPositionCauseTransition(next_cs_edge);
