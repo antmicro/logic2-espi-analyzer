@@ -1,9 +1,10 @@
-# eSPI analyzer for Saleae Logic 2
+# eSPI protocol decoder for Saleae Logic 2 analyzer
 
 Copyright (c) 2026 [Antmicro](https://www.antmicro.com)
 
-This repository contains a low-level analyzer for the Intel Enhanced Serial Peripheral Interface (eSPI), built with the [Saleae Analyzer SDK](https://github.com/saleae/AnalyzerSDK).
-It decodes eSPI commands and responses in [Logic 2](https://www.saleae.com/), including configuration registers, statuses, Virtual Wires and short I/O accesses.
+This repository contains a low-level protocol decoder for the Intel Enhanced Serial Peripheral Interface (eSPI), built with the [Saleae Analyzer SDK](https://github.com/saleae/AnalyzerSDK).
+It decodes eSPI commands and responses captured with [Logic 2](https://www.saleae.com/).
+The decoded eSPI payload includes configuration registers, statuses, Virtual Wires and short I/O accesses.
 
 ## Features
 
@@ -64,14 +65,13 @@ Faster eSPI clocks require a higher capture rate.
 
 | Setting | Behavior |
 | --- | --- |
-| Initial I/O mode | Single (default), Dual or Quad. Must match the mode at the start of the capture. |
+| Initial I/O mode | Single (default), Dual or Quad. I has to match the eSPI transmission mode being used at the start of the capture. |
 | CS# glitch filter (ns) | Ignore high and low CS# pulses shorter than the specified duration. Defaults to `0` (disabled). |
 | Ignore ALERT# | Suppress alert frames in bubbles, tables, terminal output and exports. Disabled by default. |
 | Ignore PUT_IORD_SHORT | Hide short I/O reads from bubbles, tables, terminal output and exports. Decoding continues to keep track of transaction boundaries. Disabled by default. |
 
 An in-band reset returns the decoder to Single mode after all four I/O lines have been high for 16 clocks.
 Shared IO1 alerts are ignored until the first transaction, both at capture start and after a reset.
-
 
 ## Limitations
 
